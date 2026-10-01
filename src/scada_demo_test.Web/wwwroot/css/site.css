@@ -3241,3 +3241,62 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
   .eg-half:last-child { border-bottom: 0; }
   .eg-head { font-size: 12px; }
 }
+
+/* ==========================================================================
+   DARK THEME
+   Opt-in via the toggle in the top bar: <html data-theme="dark">.
+   Every --var above is re-declared here so the whole app repaints in one
+   pass - no per-page overrides needed, and no page can forget to opt in.
+   ========================================================================== */
+html[data-theme="dark"] {
+  --bg-body: #0b1120;
+  --bg-surface: #0f172a;
+  --bg-card: #111c2e;
+  --bg-card-hover: #16223a;
+  --bg-card-subtle: #0e1626;
+
+  --border-color: #1e2d44;
+  --border-subtle: #16223a;
+  --border-strong: #2a3d58;
+  --border-focus: #38bdf8;
+
+  --primary-blue: #38bdf8;
+  --primary-blue-hover: #0ea5e9;
+  --primary-blue-light: #0c2a43;
+  --primary-glow: rgba(56, 189, 248, 0.18);
+
+  --accent-emerald: #34d399;
+  --accent-emerald-light: #064e3b;
+  --accent-amber: #fbbf24;
+  --accent-amber-light: #422006;
+  --accent-rose: #fb7185;
+  --accent-rose-light: #4c0519;
+  --accent-indigo: #818cf8;
+  --accent-indigo-light: #1e1b4b;
+
+  --text-main: #e2e8f0;
+  --text-body: #cbd5e1;
+  --text-muted: #94a3b8;
+  --text-light: #64748b;
+
+  --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.5), 0 1px 2px -1px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.5), 0 2px 4px -2px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.4);
+  --shadow-dropdown: 0 12px 28px rgba(0, 0, 0, 0.6), 0 4px 10px rgba(0, 0, 0, 0.4);
+}
+
+/* ---------- Theme toggle button (top bar) ---------- */
+.theme-toggle {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  transition: color 0.15s ease, background 0.15s ease, transform 0.2s ease;
+}
+.theme-toggle:hover { background: var(--bg-card-hover); color: var(--text-main); }
+.theme-toggle:active { transform: scale(0.92); }
+.theme-toggle svg { width: 18px; height: 18px; }

@@ -134,7 +134,7 @@ else
                     <div style="margin-top:0.7rem;padding-top:0.6rem;border-top:1px solid var(--border);" @onclick:stopPropagation>
                         @if (Scanning)
                         {
-                            <div style="color:var(--text-muted);font-size:0.78rem;">Probing Modbus addresses @ScanStartAddress..@ScanEndAddress at @ProbeTimeoutMs ms each — registered sensors auto-skipped…</div>
+                            <div style="color:var(--text-muted);font-size:0.78rem;">Scanning @(ScanModeLabel) — registered sensors auto-skipped…</div>
                         }
                         else if (string.IsNullOrWhiteSpace(d.IpAddress))
                         {
@@ -146,15 +146,19 @@ else
                             <div style="color:var(--accent-rose);font-size:0.85rem;padding:0.4rem 0;">Gateway did not respond during the scan. Confirm it is powered + reachable and is a Modbus TCP gateway, then retry.</div>
                         }
 
-                        <div style="margin-top:0.5rem;display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;" @onclick:stopPropagation>
-                            <label style="color:var(--text-muted);font-size:0.78rem;">Address range</label>
-                            <input type="number" class="custom-input" style="width:70px;" @bind="ScanStartAddress" />
-                            <span style="color:var(--text-muted);font-size:0.8rem;">to</span>
-                            <input type="number" class="custom-input" style="width:70px;" @bind="ScanEndAddress" />
-                            <label style="color:var(--text-muted);font-size:0.78rem;margin-left:0.4rem;">Probe timeout (ms)</label>
-                            <input type="number" class="custom-input" style="width:90px;" @bind="ProbeTimeoutMs" />
-                            <span style="color:var(--text-muted);font-size:0.75rem;">9600-baud buses need ≥100 ms per probe.</span>
-                        </div>
+                        @if (!Scanning && SelectedGatewayGuid == d.Id && string.IsNullOrWhiteSpace(d.IpAddress) == false)
+                        {
+                            <div style="margin-top:0.5rem;display:flex;flex-direction:column;gap:0.4rem;align-items:flex-start;" @onclick:stopPropagation>
+                                <button class="btn-secondary-scada" style="font-size:0.78rem;padding:0.35rem 0.8rem;align-self:flex-start;"
+                                        @onclick="() => QuickScanAsync()" disabled="@Scanning">
+                                    ⚡ Quick 1-20
+                                </button>
+                                <button class="btn-primary-scada" style="font-size:0.78rem;padding:0.35rem 0.8rem;align-self:flex-start;"
+                                        @onclick="() => FullScanAsync()" disabled="@Scanning">
+                                    🔍 Find Sensors (Full 1-247)
+                                </button>
+                            </div>
+                        }
 
                         @if (LastScan != null)
                         {
@@ -175,10 +179,24 @@ else
                                     </div>
                                 </div>
 
-                                @if (LastScan.Found != null && LastScan.Found.Count == 0)
-                                {
-                                    <div style="color:var(--text-muted);font-size:0.85rem;">No meters responded on this bus. Check wiring, slave addresses and gateway configuration.</div>
-                                }
+                                 @if (LastScan.DuplicateIdConflicts?.Count > 0)
+                                 {
+                                     foreach (var c in LastScan.DuplicateIdConflicts)
+                                     {
+                                         <div class="modal-alert warning" style="margin-bottom:0.5rem;">⚠️ @c.Message</div>
+                                     }
+                                 }
+                                 @if (LastScan.AmbiguousSlaves?.Count > 0)
+                                 {
+                                     foreach (var s in LastScan.AmbiguousSlaves)
+                                     {
+                                         <div class="modal-alert warning" style="margin-bottom:0.5rem;">⚠️ Slave @s is ambiguous — confirm the meter type from the candidates below.</div>
+                                     }
+                                 }
+                                 @if (LastScan.Found != null && LastScan.Found.Count == 0)
+                                 {
+                                     <div style="color:var(--text-muted);font-size:0.85rem;">No meters responded on this bus. Check wiring, slave addresses and gateway configuration.</div>
+                                 }
                                 else
                                 {
                                     @foreach (var m in LastScan.Found ?? new List<ScadaDemoTestApiClient.ScannedMeterDto>())
@@ -191,7 +209,7 @@ else
                                                        checked="@isChecked" @onchange="() => ToggleOne(m.SlaveAddress)" />
                                                 <div style="width:32px;height:32px;border-radius:6px;display:flex;align-items:center;justify-content:center;background:var(--primary-blue-light);border:1px solid rgba(2,132,199,0.2);font-size:0.85rem;font-weight:700;color:var(--primary-blue);">@m.SlaveAddress</div>
                                                 <div>
-                                                    <div style="font-weight:600;color:var(--text-primary);font-size:0.9rem;">@m.DisplayName</div>
+                                                    <div style="font-weight:600;color:var(--text-primary);font-size:0.9rem;">@m.DisplayName @if(m.IsAmbiguous){<span style="color:var(--accent-amber);font-size:0.75rem;margin-left:0.3rem;">(ambiguous)</span>}</div>
                                                     <div style="color:var(--text-muted);font-size:0.76rem;">
                                                         @if (!isUnknown)
                                                         {
@@ -215,15 +233,11 @@ else
                                     </div>
                                 }
 
-                                <div style="margin-top:0.8rem;display:flex;justify-content:flex-end;align-items:center;gap:0.7rem;">
+                                <div style="margin-top:0.8rem;">
                                     @if (ConfirmSelection.Count == 0)
                                     {
                                         <span style="color:var(--text-muted);font-size:0.78rem;">Select meter(s) above to enable adding sensors to the application.</span>
                                     }
-                                    <button class="btn-primary-scada" @onclick="StartAddFlow" @onclick:stopPropagation
-                                            disabled="@(ConfirmSelection.Count == 0)">
-                                        + Add Sensor to Application @(ConfirmSelection.Count > 0 ? $"({ConfirmSelection.Count})" : "")
-                                    </button>
                                 </div>
                             </div>
                         }
@@ -643,9 +657,7 @@ else
 
     private bool Scanning;
     private bool ScanFailed;
-    private int ProbeTimeoutMs = 200;
-    private int ScanStartAddress = 1;
-    private int ScanEndAddress = 10;
+    private string ScanModeLabel = "";
     private ScadaDemoTestApiClient.GatewayScanResultDto? LastScan;
     private bool SelectAllFound;
     private readonly HashSet<int> ConfirmSelection = new();
@@ -687,6 +699,16 @@ else
             {
                 new("InstantaneousFlowRate", "Flow Rate", "m³/h"),
                 new("AccumulatedTotalizer", "Totalizer", "m³"),
+            },
+            ["VORTEX_FLOWMETER"] = new()
+            {
+                new("InstantaneousFlowRate", "Flow Rate", "m³/h"),
+                new("AccumulatedTotalizer", "Totalizer", "m³"),
+            },
+            ["SELEC_POWER_METER"] = new()
+            {
+                new("InstantaneousFlowRate", "Power", "kW"),
+                new("AccumulatedTotalizer", "Energy", "kWh"),
             },
         };
 
@@ -864,22 +886,20 @@ else
         {
             await SelectGateway(d);
         }
-        await FindSensorsAsync();
+        await FindSensorsAsync(passes: 0, deepDuplicateCheck: true, "Full 1-247");
     }
 
-    private async Task FindSensorsAsync()
+    private async Task FindSensorsAsync(int passes, bool deepDuplicateCheck, string modeLabel)
     {
         if (Scanning || SelectedGatewayGuid is not Guid gid) return;
         Scanning = true;
         ScanFailed = false;
+        ScanModeLabel = modeLabel;
+        ConfirmSelection.Clear();
 
         try
         {
-            var result = await Api.ScanGatewayBusAsync(
-                gid,
-                Math.Clamp(ProbeTimeoutMs, 10, 1000),
-                Math.Clamp(ScanStartAddress, 1, 247),
-                Math.Clamp(ScanEndAddress, 1, 247));
+            var result = await Api.ScanGatewayBusAsync(gid, probeTimeoutMs: 200, passes: passes, deepDuplicateCheck: deepDuplicateCheck);
             if (result is null || !result.ConnectivityOk)
             {
                 ScanFailed = true;
@@ -890,9 +910,10 @@ else
                 {
                     Found = result.Found ?? new(),
                     SkippedSlaves = result.SkippedSlaves ?? new(),
+                    AmbiguousSlaves = result.AmbiguousSlaves ?? new(),
+                    DuplicateIdConflicts = result.DuplicateIdConflicts ?? new(),
                 };
                 LastScan = result;
-                ConfirmSelection.Clear();
                 SelectAllFound = false;
             }
         }
@@ -907,6 +928,9 @@ else
 
         StateHasChanged();
     }
+
+    private void QuickScanAsync() { _ = FindSensorsAsync(passes: 1, deepDuplicateCheck: false, "Quick 1-20"); }
+    private void FullScanAsync() { _ = FindSensorsAsync(passes: 0, deepDuplicateCheck: true, "Full 1-247"); }
 
     private void ToggleOne(int slave)
     {
@@ -1041,7 +1065,7 @@ else
 
     // Drivers that report a volume totalizer -> the only ones that can back a tank.
     private static readonly HashSet<string> TankCapableDrivers =
-        new(StringComparer.OrdinalIgnoreCase) { "KAIFENG_FLOWMETER", "KAIFENG_EM_FLOWMETER" };
+        new(StringComparer.OrdinalIgnoreCase) { "KAIFENG_FLOWMETER", "KAIFENG_EM_FLOWMETER", "VORTEX_FLOWMETER" };
 
     private static bool HasTankSupport(string driverKey) =>
         TankCapableDrivers.Contains(driverKey);

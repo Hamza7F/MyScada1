@@ -61,8 +61,11 @@ public sealed class ModbusScanner : ISmartScanService
 
     // A driver about to be thrown away by the degeneracy guard gets its proof
     // block re-read this many times before rejection - a transport hiccup must
-    // not lose a genuine match.
-    private const int DegeneracyProofAttempts = 4;
+    // not lose a genuine match. Raised 4 -> 8: on the real bus the Selec RI-F200-C
+    // reads a genuine 0 kW / 0 kWh (CT not connected), so its identity hinges on the
+    // @64 voltage block being served; one failed read ties the Kaifeng ghost and
+    // flags a perfectly good meter ambiguous.
+    private const int DegeneracyProofAttempts = 8;
     private const int InterWindowDelayMs = 60;
     private const int MaxProbeTimeoutMs = 1000;
 
@@ -294,15 +297,17 @@ public sealed class ModbusScanner : ISmartScanService
         var result = new SlaveProbe();
 
         // Presence: one FC03 window and one FC04 window. A silent address costs
-        // exactly two reads; an FC03-only OR FC04-only meter is still detected.
-        var (k3, _) = await ReadBlockAsync(master, req, connectMs, slave, new SensorReadWindow(0x03, 0, 2), probeTimeout, ct);
-        if (k3 == ReadKind.Unsafe) { result.ConnectionUnsafe = true; return result; }
-        if (k3 == ReadKind.Absent)
-        {
-            var (k4, _) = await ReadBlockAsync(master, req, connectMs, slave, new SensorReadWindow(0x04, 42, 2), probeTimeout, ct);
-            if (k4 == ReadKind.Unsafe) { result.ConnectionUnsafe = true; return result; }
-            if (k4 == ReadKind.Absent) return result; // silent
-        }
+        // exactly one probe timeout; an FC03-only OR FC04-only meter is still
+        // detected. The two probes run CONCURRENTLY (Task.WhenAny) so a slow or
+        // timing-out FC03 on a degraded bus does not add a full probe timeout
+        // before the FC04 probe even starts - that is what made a quiet bus
+        // feel like it was hanging.
+        var probe3 = ReadBlockAsync(master, req, connectMs, slave, new SensorReadWindow(0x03, 0, 2), probeTimeout, ct);
+        var probe4 = ReadBlockAsync(master, req, connectMs, slave, new SensorReadWindow(0x04, 42, 2), probeTimeout, ct);
+        var (k3, _) = await probe3;
+        var (k4, _) = await probe4;
+        if (k3 == ReadKind.Unsafe || k4 == ReadKind.Unsafe) { result.ConnectionUnsafe = true; return result; }
+        if (k3 == ReadKind.Absent && k4 == ReadKind.Absent) return result; // silent
 
         // Full identification: every installed driver's own identification window.
         for (int d = 0; d < _drivers.Count; d++)
@@ -470,7 +475,8 @@ public sealed class ModbusScanner : ISmartScanService
         {
             ModbusTcpSession? session = null;
             int sampled = 0;
-            int answered = 0;
+            int answered = 0;   // NON-ZERO replies only - a collision witness
+            int served = 0;     // ANY reply (incl. zeros) - for the give-up rule
             try
             {
                 while (sampled < perWindow)
@@ -490,7 +496,15 @@ public sealed class ModbusScanner : ISmartScanService
                         var payload = win.FunctionCode == 0x04
                             ? await session.ReadInputRegistersAsync(slave, win.StartRegister, win.RegisterQuantity, ct, readTimeout)
                             : await session.ReadHoldingRegistersAsync(slave, win.StartRegister, win.RegisterQuantity, ct, readTimeout);
-                        if (payload.Length > 0) answered++;
+                        if (payload.Length > 0)
+                        {
+                            served++;
+                            // Only NON-ZERO replies count as a collision witness.
+                            // A zero-filler (the Selec RI-F200-C answers EVERY
+                            // FC04 address with zeros) is NOT a second device
+                            // racing - counting zeros hid two unique meters.
+                            if (AnyNonZero(payload)) answered++;
+                        }
                     }
                     catch (ModbusException ex) when (ex.IsProtocolError)
                     {
@@ -510,7 +524,9 @@ public sealed class ModbusScanner : ISmartScanService
 
                     // Give-up: this block is answered ~100% - the address's own
                     // meter or a zero-filler owns it, so it cannot witness a race.
-                    if (answered == sampled && sampled >= ForeignCollisionGiveUpSamples)
+                    // Uses `served` (any reply incl. zeros) so a zero-filler still
+                    // short-circuits instead of burning the full 300-sample budget.
+                    if (served == sampled && sampled >= ForeignCollisionGiveUpSamples)
                         break;
                 }
 

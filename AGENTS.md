@@ -248,12 +248,69 @@ cd firmware/Norvi-ESP32 && pio run -t upload
 >   libraries = 3 drivers, login returns a 1183-char token, devices = 3, zero fail/error
 >   in the API log.
 >
-> Last updated: 2026-09-30 (QUICK scan 165 s -> ~42 s: the expensive deep duplicate
-> check is now an explicit per-request mode, OFF for Quick and ON for "Find Sensors" -
-> see item 45. **The bus layout was re-mapped again while testing: the current map is
-> 1=Aosong, 2=Vortex, 3=EM, 4=Selec and the scan reports `found=4, conflicts=0` in
-> every Quick run.** The duplicate detector itself is unchanged and still proven by all
-> three mocks. The 151-172 s the operator kept seeing was ~72% duplicate verification,
+> Last updated: **2026-10-01 (re-implementation in progress)**. Items 29-32 + the
+> scanner rewrite (33-45) are now in source and **VERIFIED LIVE on the real USR-W610
+> bus** (see below). The stale 2026-09-30 excerpt immediately below is the ORIGINAL
+> spec text; the live bus map in those lines is now superseded by the measured map
+> under "LIVE SCAN VERIFIED 2026-10-01".
+>
+> - **Items 29-32 (driver contract + Vortex/Selec drivers) - DONE 2026-10-01**:
+>   `ISensorDriver.cs` extended with `SensorReadWindow` / `WindowTelemetry` /
+>   `ParsedTelemetry` + default `ReadWindows` / `ParseWindow` / `CorroborationWindow`;
+>   `ModbusValueCodec.cs` NEW (high/low-word-first float + negative-zero fold);
+>   `AosongAQ3485Driver.cs` reg order fixed (reg0=humidity, reg1=temp);
+>   `KaifengFlowmeterDriver`/`ElectromagneticFlowmeterDriver` refactored to the codec;
+>   `VortexFlowmeterDriver` (VORTEX_FLOWMETER, FC04 @1026 q2, proof @1067) and
+>   `SelecPowerMeterDriver` (SELEC_POWER_METER, FC04 @42 q2, proof @64 q10, low-word-first)
+>   NEW, both registered in `SensorDriverCatalog` + `Program.cs` DI. `SmartScanDtos.cs`
+>   rewritten (`Passes`/`DeepDuplicateCheck`, `ScannedCandidateDto`, `IsAmbiguous`/
+>   `Candidates`, `DuplicateSlaveIdConflictDto`, `AmbiguousSlaves`/`DuplicateIdConflicts`).
+>   `ModbusTcpMaster.cs` gained `ModbusException.IsProtocolError` + a new
+>   `ModbusConnectException` (connect failure is a gateway-wide fault, not a silent
+>   slave). `ModbusPollingHostedService.cs` now loops `driver.ReadWindows`, dispatches
+>   FC03 vs FC04, merges nullable primary/secondary, concatenates raw, applies
+>   calibration once, and applies `InterWindowDelayMs=60` between windows.
+> - **`ModbusScanner.cs` FULL REWRITE (items 31-45) - DONE 2026-10-01**: presence probe
+>   (FC03 @0 + FC04 @42), every driver's own identification window, remaining windows,
+>   corroboration with `DegeneracyProofAttempts=4`, degeneracy guard, rank
+>   `(Width, Unproven, Live, Extra, Order)`, vote gate + foreign-window collision hunt,
+>   tiering (Quick 1..20, Full 1..20 then 21..247), rank-aware merge, ambiguity flag,
+>   per-address isolation + `UnreachableFailureStreak=12`, scan connect capped at 1500ms.
+>   `DevicesController.ScanBus` extended (`Passes`, `DeepDuplicateCheck`, EndAddress=247)
+>   and a new `GET /api/devices/{id:guid}/reachability` endpoint added.
+> - **LIVE SCAN VERIFIED 2026-10-01** on `USR Gateway` (DEV-A355817F, USR-W610,
+>   10.10.100.254:502): **Quick (`passes=1, deep=false`) = 18s, found=4/4, conflicts=0,
+>   ambiguous=0, unknown=0**:
+>   | Slave | Driver | Live |
+>   |---|---|---|
+>   | 1 | KAIFENG_EM_FLOWMETER | 0 m³/h / 0.64 m³ |
+>   | 2 | VORTEX_FLOWMETER | 0 m³/h / 0 m³ |
+>   | 3 | AOSONG_AQ3485 | 29.1 °C / 56.8 %RH |
+>   | 4 | SELEC_POWER_METER | 0 kW / 0 kWh |
+>   **Full (`passes=0, deep=true`) = 243s, found=4/4, conflicts=0** - but slave 4 is
+>   flagged `ambiguous` in that one run because the Selec's `@64 q10` proof read failed
+>   once, tying the Kaifeng ghost on Width+Unproven. Quick is clean; Full has that one
+>   false ambiguity (the gateway was OFF for part of the session, so the first Quick
+>   run correctly returned `responding=0` in 200s until the connect cap was added).
+>   `GET /api/devices/{guid}/reachability` verified: offline gateway -> 1506ms
+>   `reachable=false`; Norvi -> data-driven message, no TCP probe. API :5080 (PID 2936)
+>   + Web :5150 both running, `/_framework/blazor.server.js` -> 200, login -> 302
+>   `/dashboard`, all routes 200 with the cookie jar. Builds 0 warnings/0 errors.
+>   - **DUPLICATE DETECTION VERIFIED 2026-10-01** with purpose-built mocks:
+>     - **dupmock** (3 families sharing slave 2): Quick `conflicts=1, meters=3, found=0`;
+>       Full same. Message: "Your 3 sensors are using the same slave ID 2. Change all but
+>       one to a different slave ID, then scan again." Correct — colliding address hidden
+>       from Found, conflict count accurate.
+>     - **uniqmock** (unique zero-filler Selec at slave 5): `found=1 (SELEC_POWER_METER),
+>       conflicts=0, ambiguous=0`. No false positive on the S5 scenario the framing path
+>       used to trip on. Both vote-gate AND foreign-window paths verified.
+>   - **STILL OPEN**: Web UI still maps the OLD scan DTO shape (no
+>     `IsAmbiguous`/`Candidates`/`DuplicateIdConflicts`/`Reachability` in
+>     `Gateway.razor`); `AGENTS.md` item-45 bus map says S1=Aosong/S2=Vortex/S3=EM/S4=Selec
+>     which is now superseded by the measured map above (S1=EM/S2=Vortex/S3=Aosong/S4=Selec).
+>
+> The 2026-09-30 spec excerpt below is kept for reference; the live bus map in it
+> (1=Aosong, 2=Vortex, 3=EM, 4=Selec) is superseded by the measured map above.
 > now an opt-in cost instead of a mandatory one; the on-screen estimate is an upper
 > bound that stops quoting a number once real time passes it.
 > PREVIOUS: 2026-09-30 (quick-scan SPEED work + bus re-map - see item 44). **The bus
@@ -2259,11 +2316,12 @@ the poll path.
       and makes `.Count` report the FIRST element's field count, so a 3-device list shows
       `devices: 1` and `libraries: 1`. The data is fine. Count with `@(...).Length`, and
       prefer the API's own array shape.
-    - Builds: API + Web **0 warnings / 0 errors**. Quick scan measured at **165 s and
-      172 s** on consecutive real runs, `responding=4 found=4 conflicts=0 amb=0 unk=0`,
-      slaves **1=Aosong, 2=Vortex, 3=EM, 4=Selec** (all four distinct - the operator
-      moved the EM off the contested address). `/_framework/blazor.server.js` 200,
+    - Builds: API + Web **0 warnings / 0 errors**. `/_framework/blazor.server.js` 200,
       `/api/health` -> `good=1`, `libraries` -> 5 drivers, zero fail/error in either log.
+      **NOTE (2026-10-01 re-measurement): the live bus map in this item-45 paragraph
+      is now SUPERSEDED by the measured map in the recovery banner above - the real
+      bus is S1=Kaifeng EM, S2=Vortex, S3=Aosong, S4=Selec, NOT 1=Aosong/2=Vortex/3=EM/4=Selec.
+      Trust the banner, not this older line.**
     - **RUNNING NOW** (WMI-detached, `ASPNETCORE_ENVIRONMENT=Development`, **no Debug
       logging**): API `0.0.0.0:5080` (PID 14760), Web `localhost:5150` (PID 6288).
       DB clean: 3 devices (gateway online, 2 Norvi push-idle offline), 0 sensors, all

@@ -13,4 +13,7 @@
          Web still talks to scada_demo_test.API purely over HTTP for everything else. -->
     <ProjectReference Include="..\scada_demo_test.Domain\scada_demo_test.Domain.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Update="wwwroot\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

@@ -9,11 +9,13 @@ namespace scada_demo_test.Web.Services;
 public class ScadaDemoTestApiClient
 {
     private readonly HttpClient _http;
+    private readonly HttpClient _scan;
     private readonly FirebaseScadaService _firebase;
 
-    public ScadaDemoTestApiClient(HttpClient http, FirebaseScadaService firebase)
+    public ScadaDemoTestApiClient(HttpClient http, IHttpClientFactory factory, FirebaseScadaService firebase)
     {
         _http = http;
+        _scan = factory.CreateClient("scada-bus-scan");
         _firebase = firebase;
     }
 
@@ -568,15 +570,55 @@ public class ScadaDemoTestApiClient
         double PrimaryValue, double SecondaryValue, short ConnectionStatus, string? ErrorCode);
 
     // Smart & Fast RS-485 bus scan result (discovery only - nothing persisted).
-    public record ScannedMeterDto(int SlaveAddress, string? DriverKey, string? SimpleName, string? DisplayName,
-        ushort StartRegister, ushort RegisterQuantity, string? UnitPrimary, string? UnitSecondary,
-        int DefaultPollIntervalSeconds, string SuggestedName, double? LivePrimary, double? LiveSecondary,
-        string Status);
+    public record ScannedMeterDto(
+        int SlaveAddress,
+        string? DriverKey,
+        string? SimpleName,
+        string? DisplayName,
+        ushort StartRegister,
+        ushort RegisterQuantity,
+        string? UnitPrimary,
+        string? UnitSecondary,
+        int DefaultPollIntervalSeconds,
+        string SuggestedName,
+        double? LivePrimary,
+        double? LiveSecondary,
+        string Status,
+        bool IsAmbiguous = false,
+        List<ScannedCandidateDto>? Candidates = null);
 
-    public record GatewayScanResultDto(Guid DeviceId, string DeviceName, string? GatewayIp, int GatewayPort,
-        int ProbeTimeoutMs, int SlavesScanned, int RespondingSlaves, int UnknownResponders,
-        bool ConnectivityOk, string? ErrorCode, DateTime ScannedAtUtc,
-        List<ScannedMeterDto> Found, List<int> SkippedSlaves);
+    public record ScannedCandidateDto(
+        string DriverKey,
+        string DisplayName,
+        ushort StartRegister,
+        ushort RegisterQuantity,
+        double? LivePrimary,
+        double? LiveSecondary,
+        bool ProofServed,
+        bool BestGuess);
+
+    public record DuplicateIdConflictDto(
+        int SlaveAddress,
+        int MeterCount,
+        string? DriverName,
+        string Message);
+
+    public record GatewayScanResultDto(
+        Guid DeviceId,
+        string DeviceName,
+        string? GatewayIp,
+        int GatewayPort,
+        int ProbeTimeoutMs,
+        int SlavesScanned,
+        int RespondingSlaves,
+        int UnknownResponders,
+        bool ConnectivityOk,
+        string? ErrorCode,
+        DateTime ScannedAtUtc,
+        List<ScannedMeterDto> Found,
+        List<int> SkippedSlaves,
+        List<int>? AmbiguousSlaves = null,
+        List<DuplicateIdConflictDto>? DuplicateIdConflicts = null);
 
     public async Task<List<GatewayDeviceDto>> GetGatewayDevicesAsync()
     {
@@ -722,11 +764,25 @@ public class ScadaDemoTestApiClient
         catch { return null; }
     }
 
-    public async Task<GatewayScanResultDto?> ScanGatewayBusAsync(Guid deviceId, int probeTimeoutMs = 200, int startAddress = 1, int endAddress = 10)
+    public async Task<GatewayScanResultDto?> ScanGatewayBusAsync(
+        Guid deviceId,
+        int probeTimeoutMs = 200,
+        int startAddress = 1,
+        int endAddress = 247,
+        int passes = 0,
+        bool deepDuplicateCheck = true)
     {
         try
         {
-            var response = await _http.PostAsJsonAsync($"/api/devices/{deviceId}/scan", new { probeTimeoutMs, startAddress, endAddress });
+            var body = new
+            {
+                probeTimeoutMs,
+                startAddress,
+                endAddress,
+                passes,
+                deepDuplicateCheck
+            };
+            var response = await _scan.PostAsJsonAsync($"/api/devices/{deviceId}/scan", body);
             if (response.IsSuccessStatusCode)
             {
                 return await response.Content.ReadFromJsonAsync<GatewayScanResultDto>();

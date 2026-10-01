@@ -51,8 +51,31 @@ builder.Services.AddHttpClient<ScadaDemoTestApiClient>(client =>
     client.BaseAddress = new Uri(apiBaseUrl.TrimEnd('/') + "/");
 }).AddHttpMessageHandler<PermissionForwardingHandler>();
 
+// A dedicated, long-capped client for the bus scan ONLY. A full 1..247 sweep
+// legitimately takes ~60-240 s (every silent address burns the whole probe
+// timeout), so the shared 10 s safety cap would cancel it mid-sweep and the bare
+// catch would silently surface it as "gateway did not respond". Every other call
+// stays on the 10 s default.
+builder.Services.AddHttpClient("scada-bus-scan", client =>
+{
+    client.BaseAddress = new Uri(apiBaseUrl.TrimEnd('/') + "/");
+    client.Timeout = TimeSpan.FromMinutes(5);
+}).AddHttpMessageHandler<PermissionForwardingHandler>();
+
 builder.Services.AddSingleton<ITelemetryBroadcastBus, TelemetryBroadcastBus>();
 builder.Services.AddScoped<LiveTelemetryState>();
+
+// Load the static-web-assets manifest so wwwroot/_framework/blazor.server.js and
+// site.css are served even when the .exe is launched directly (ASPNETCORE_ENVIRONMENT
+// not set -> Production, where the manifest is NOT loaded automatically). Guarded by
+// the manifest file actually existing so a source-only checkout never 500s.
+var staticManifestPath = Path.Combine(
+    AppContext.BaseDirectory,
+    builder.Environment.ApplicationName + ".staticwebassets.runtime.json");
+if (File.Exists(staticManifestPath))
+{
+    builder.WebHost.UseStaticWebAssets();
+}
 
 var app = builder.Build();
 
