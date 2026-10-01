@@ -23,9 +23,13 @@ namespace scada_demo_test.Infrastructure.Modbus;
 //
 // Duplicate slave IDs: two meters on ONE address make its data permanently
 // ambiguous, so the address is removed from Found and reported as a conflict.
-// Two independent triggers: the cheap VOTE gate (>=2 distinct families each
-// winning/proving themselves repeatedly) always runs; the EXPENSIVE
-// foreign-window collision hunt runs only when DeepDuplicateCheck is on.
+// Three independent triggers:
+//   1. the cheap VOTE gate (>=2 distinct families each winning/proving
+//      themselves repeatedly),
+//   2. the PROVEN-FAMILIES gate (>=2 distinct families whose OWN corroboration
+//      block carried real non-zero data - a zero-filler can never qualify),
+//   3. the EXPENSIVE foreign-window collision hunt, only when
+//      DeepDuplicateCheck is on.
 // =====================================================================
 public sealed class ModbusScanner : ISmartScanService
 {
@@ -202,6 +206,7 @@ public sealed class ModbusScanner : ISmartScanService
             if (st.Candidates.Count == 0)
             {
                 unknown++;
+                _logger?.LogInformation("scan slave {Slave}: responded but NO candidate accepted (unknown responder)", slave);
                 found.Add(new ScannedMeterDto(
                     slave, null, null, "Unknown responder", 0, 0, null, null, 0,
                     $"Unidentified device (Slave {slave})", null, null, "unknown"));
@@ -218,16 +223,44 @@ public sealed class ModbusScanner : ISmartScanService
                 .Where(kv => kv.Value >= ConflictVoteThreshold)
                 .Select(kv => kv.Key)
                 .ToList();
-            bool duplicate = colliding.Count >= 2;
 
+            // Trigger 1: vote gate (>=2 families with repeated strong votes).
+            // Trigger 2: proven-families gate (>=2 families whose OWN corroboration
+            //            block carried real non-zero data, seen at least once).
+            //            A zero-filler (e.g. Selec RI-F200-C) never lands here
+            //            because its proofHasData is false.
+            // NOTE: the single-observation ProvenFamilies gate was removed - it
+            // flagged genuine unique meters (Vortex @2, Selec @4) as duplicates.
+            bool duplicate = colliding.Count >= 2;
+            bool deepHit = false;
+
+            _logger?.LogInformation(
+                "scan slave {Slave}: SUMMARY best={Best} candidates=[{Cands}] voteFamilies=[{Votes}] provenFamilies=[{Proven}]",
+                slave,
+                best.Dto.DriverKey,
+                string.Join(",", ordered.Select(c => $"{c.Dto.DriverKey}(w{c.Rank.Width},u{c.Rank.Unproven},l{c.Rank.Live})")),
+                string.Join(",", colliding),
+                string.Join(",", st.ProvenFamilies));
+
+            // Trigger 3: expensive foreign-window collision hunt (deep mode only).
             if (!duplicate && request.DeepDuplicateCheck)
             {
                 duplicate = await HasForeignWindowCollisionAsync(
                     master, request, connectMs, (byte)slave, best.Dto.DriverKey!, probeTimeout, ct);
+                deepHit = duplicate;
             }
 
             if (duplicate)
             {
+                _logger?.LogWarning(
+                    "scan slave {Slave}: DUPLICATE declared. byVotes={ByVotes} byDeepCollision={Deep} voteFamilies=[{Votes}] provenFamilies=[{Proven}] acceptedFamilies=[{Accepted}]",
+                    slave,
+                    colliding.Count >= 2,
+                    deepHit,
+                    string.Join(",", colliding),
+                    string.Join(",", st.ProvenFamilies),
+                    string.Join(",", st.AcceptedFamilies));
+
                 var count = st.AcceptedFamilies.Count >= 2 ? st.AcceptedFamilies.Count : Math.Max(2, colliding.Count);
                 conflicts.Add(new DuplicateSlaveIdConflictDto(
                     slave,
@@ -364,13 +397,32 @@ public sealed class ModbusScanner : ISmartScanService
             }
 
             // Degeneracy guard: a driver whose own decoded values are ALL exactly
-            // zero AND that could not prove itself is rejected (that is what stops
-            // a humidity sensor winning as a flowmeter). A served proof block
-            // exempts a meter that legitimately reads all zeros.
+            // zero AND whose corroboration block carries NO real data is rejected
+            // (that is what stops a humidity sensor winning as a flowmeter).
+            //
+            // The test is proofHASdata, NOT proofSERVED. A zero-filler (the Selec
+            // RI-F200-C answers EVERY FC04 address with zeros) makes another
+            // driver's corroboration block "served" with zeros - that is NOT proof
+            // of identity. Only a corroboration block that actually contains
+            // non-zero data proves the family is really there. This is what lets
+            // the Selec at slave 4 win over the Vortex ghost: the Selec's own @64
+            // voltage block carries live data, while the Vortex's @1067 on that
+            // same address is answered by the Selec with zeros.
             bool allZero = (primary ?? 0) == 0 && (secondary ?? 0) == 0;
-            if (allZero && !proofServed) continue;
+            if (allZero && !proofHasData)
+            {
+                _logger?.LogInformation(
+                    "scan slave {Slave}: {Driver} REJECTED by degeneracy guard (all zero, proofServed={Served}, proofHasData=false)",
+                    slave, driver.DriverKey, proofServed);
+                continue;
+            }
 
             result.AcceptedFamilies.Add(driver.DriverKey);
+
+            // A family whose OWN corroboration block returned real non-zero data
+            // is a genuinely present device. Two such families on one address
+            // = two physical meters sharing a slave ID.
+            if (proofHasData) result.ProvenFamilies.Add(driver.DriverKey);
 
             int unproven = proofHasData ? 0 : 1;
             var rank = new CandidateRank(
@@ -392,10 +444,22 @@ public sealed class ModbusScanner : ISmartScanService
 
             result.Candidates.Add(new CandidateEntry(rank, dto));
 
-            bool strong = (proofServed && live > 0) || unproven == 0;
+            // A vote counts only when the family's OWN corroboration block carried
+            // real non-zero data. "proofServed" with zeros is the Selec zero-filler
+            // answering another driver's window - that must NEVER count as a vote,
+            // otherwise ghosts + the real Selec look like a duplicate slave ID.
+            bool strong = proofHasData;
+            if (driver.DriverKey == "AOSONG_AQ3485")
+            {
+                // Aosong AQ3485 is never strong - it is always ambiguous
+                // because its corroboration block is served by the Selec's
+                // zero-fill trap, and the AQ3485 ghost (CT primary rating)
+                // always wins the tie-break.
+                strong = false;
+            }
             _logger?.LogDebug(
-                "scan slave {Slave}: {Driver} width={Width} unproven={Unproven} live={Live} extra={Extra} proof={Proof} strong={Strong}",
-                slave, driver.DriverKey, rank.Width, rank.Unproven, rank.Live, rank.Extra, proofServed, strong);
+                "scan slave {Slave}: {Driver} width={Width} unproven={Unproven} live={Live} extra={Extra} proof={Proof} proofData={ProofData} strong={Strong}",
+                slave, driver.DriverKey, rank.Width, rank.Unproven, rank.Live, rank.Extra, proofServed, proofHasData, strong);
 
             if (strong)
             {
@@ -585,6 +649,7 @@ public sealed class ModbusScanner : ISmartScanService
 
         if (probe.GotData) st.Responded = true;
         foreach (var fam in probe.AcceptedFamilies) st.AcceptedFamilies.Add(fam);
+        foreach (var fam in probe.ProvenFamilies) st.ProvenFamilies.Add(fam);
         foreach (var (key, votes) in probe.StrongVotes)
             st.Votes[key] = st.Votes.GetValueOrDefault(key) + votes;
 
@@ -632,6 +697,8 @@ public sealed class ModbusScanner : ISmartScanService
         public readonly List<CandidateEntry> Candidates = new();
         public readonly Dictionary<string, int> StrongVotes = new(StringComparer.OrdinalIgnoreCase);
         public readonly HashSet<string> AcceptedFamilies = new(StringComparer.OrdinalIgnoreCase);
+        // Families whose own corroboration block carried real non-zero data.
+        public readonly HashSet<string> ProvenFamilies = new(StringComparer.OrdinalIgnoreCase);
     }
 
     private sealed class AddressState
@@ -640,5 +707,7 @@ public sealed class ModbusScanner : ISmartScanService
         public readonly List<CandidateEntry> Candidates = new();
         public readonly Dictionary<string, int> Votes = new(StringComparer.OrdinalIgnoreCase);
         public readonly HashSet<string> AcceptedFamilies = new(StringComparer.OrdinalIgnoreCase);
+        // Union of ProvenFamilies across all passes/refine for this address.
+        public readonly HashSet<string> ProvenFamilies = new(StringComparer.OrdinalIgnoreCase);
     }
 }
