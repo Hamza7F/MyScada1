@@ -2,6 +2,7 @@
 @attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = "Tab:Alerts")]
 @using Microsoft.AspNetCore.Components.Authorization
 @using scada_demo_test.Web.Services
+@using scada_demo_test.Domain.Drivers
 @inject ScadaDemoTestApiClient Api
 @inject AuthenticationStateProvider AuthProvider
 
@@ -63,23 +64,23 @@
                     <th>Alert Message</th>
                     <th>Trigger Time</th>
                     <th>Status</th>
-                    <th>Action</th>
+                    <th style="text-align:right;">Action</th>
                 </tr>
             </thead>
             <tbody>
                 @if (Incidents.Count == 0)
                 {
                     <tr>
-                        <td colspan="9" class="text-center text-muted" style="padding:30px;">
+                        <td colspan="8" class="text-center text-muted" style="padding:30px;">
                             🎉 All systems operating normally within defined thresholds.
                         </td>
                     </tr>
                 }
                 else
                 {
-                    @foreach (var inc in Incidents)
+                    @foreach (var inc in PagedIncidents)
                     {
-                        <tr class="@(inc.IsResolved ? "" : "alert-row-active")">
+                        <tr class="@(inc.IsResolved ? "" : "alert-row-active")" style="border-left: 4px solid @(inc.Severity.Equals("Critical", StringComparison.OrdinalIgnoreCase) ? "var(--accent-rose)" : inc.Severity.Equals("Warning", StringComparison.OrdinalIgnoreCase) ? "var(--accent-amber)" : "var(--primary-blue)");">
                             <td>
                                 <span class="alert-badge @inc.Severity.ToLowerInvariant()">
                                     @inc.Severity
@@ -89,8 +90,8 @@
                             <td>@inc.Metric</td>
                             <td class="font-mono text-cyan">@inc.TriggerValue.ToString("0.00")</td>
                             <td>@inc.Message</td>
-                            <td class="text-muted">@inc.TriggeredAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
-                            <td>
+                            <td class="text-muted" style="white-space:nowrap;">@inc.TriggeredAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
+                            <td style="white-space:nowrap;">
                                 @if (inc.IsResolved)
                                 {
                                     <span class="badge-resolved">✓ Acknowledged by @inc.AcknowledgedBy</span>
@@ -100,20 +101,20 @@
                                     <span class="badge-unresolved">⚠️ UNRESOLVED</span>
                                 }
                             </td>
-                            <td>
-                                @if (!inc.IsResolved)
-                                {
-                                    <button class="btn-sm-action-ack" @onclick="() => Acknowledge(inc.Id)">
-                                        Acknowledge
-                                    </button>
-                                }
-                                else
-                                {
-                                    <span class="text-muted" style="font-size:0.8rem;">Resolved</span>
-                                }
-                            </td>
-                            <td>
-                                <button class="btn-icon-action delete" title="Delete Incident" @onclick="() => DeleteIncident(inc.Id)">🗑️</button>
+                            <td style="text-align:right;white-space:nowrap;">
+                                <div style="display:inline-flex;align-items:center;gap:6px;">
+                                    @if (!inc.IsResolved)
+                                    {
+                                        <button class="btn-sm-action-ack" @onclick="() => Acknowledge(inc.Id)">
+                                            Acknowledge
+                                        </button>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted" style="font-size:0.8rem;">Resolved</span>
+                                    }
+                                    <button class="btn-icon-action delete" title="Delete Incident" @onclick="() => DeleteIncident(inc.Id)">🗑️</button>
+                                </div>
                             </td>
                         </tr>
                     }
@@ -121,6 +122,24 @@
             </tbody>
         </table>
     </div>
+
+    @if (Incidents.Count > 0)
+    {
+        <div class="pagination-bar">
+            <div class="pagination-info">
+                Showing @((IncidentPage - 1) * IncidentPageSize + 1) to @(Math.Min(IncidentPage * IncidentPageSize, Incidents.Count)) of @Incidents.Count incidents
+            </div>
+            <div class="pagination-controls">
+                <button class="pg-btn" disabled="@(IncidentPage <= 1)" @onclick="() => IncidentPage--">‹ Prev</button>
+                @for (int p = 1; p <= TotalIncidentPages; p++)
+                {
+                    var pageNum = p;
+                    <button class="pg-btn @(pageNum == IncidentPage ? "active" : "")" @onclick="() => IncidentPage = pageNum">@pageNum</button>
+                }
+                <button class="pg-btn" disabled="@(IncidentPage >= TotalIncidentPages)" @onclick="() => IncidentPage++">Next ›</button>
+            </div>
+        </div>
+    }
 </div>
 
 <!-- Configured Rules -->
@@ -139,32 +158,67 @@
                     <th>Severity</th>
                     <th>Notification Email</th>
                     <th>Status</th>
-                    <th>Action</th>
+                    <th style="text-align:right;">Action</th>
                 </tr>
             </thead>
             <tbody>
-                @foreach (var r in Rules)
+                @if (Rules.Count == 0)
                 {
                     <tr>
-                        <td><code>@r.DeviceExternalId</code></td>
-                        <td>@MetricLabel(r.Metric) @MetricUnit(r.Metric)</td>
-                        <td>@r.Condition</td>
-                        <td class="font-mono text-cyan">@r.ThresholdValue</td>
-                        <td><span class="alert-badge @r.Severity.ToLowerInvariant()">@r.Severity</span></td>
-                        <td>@(string.IsNullOrEmpty(r.NotificationEmail) ? "operations@alamiot.com" : r.NotificationEmail)</td>
-                        <td>
-                            <span class="status-pill @(r.IsEnabled ? "online" : "offline")">
-                                <span class="status-dot"></span>@(r.IsEnabled ? "Active" : "Disabled")
-                            </span>
-                        </td>
-                        <td>
-                            <button class="btn-icon-action delete" title="Delete Rule" @onclick="() => DeleteRule(r.Id)">🗑️</button>
+                        <td colspan="8" class="text-center text-muted" style="padding:24px;">
+                            No custom alarm threshold rules configured yet.
                         </td>
                     </tr>
+                }
+                else
+                {
+                    @foreach (var r in PagedRules)
+                    {
+                        <tr>
+                            <td>
+                                <strong>@GetTargetName(r.DeviceExternalId)</strong>
+                                @if (r.DeviceExternalId != "ALL")
+                                {
+                                    <div style="font-size:0.73rem;color:var(--text-muted);font-family:monospace;">@r.DeviceExternalId</div>
+                                }
+                            </td>
+                            <td>@MetricLabel(r.Metric) @MetricUnit(r.Metric)</td>
+                            <td>@r.Condition</td>
+                            <td class="font-mono text-cyan">@r.ThresholdValue</td>
+                            <td><span class="alert-badge @r.Severity.ToLowerInvariant()">@r.Severity</span></td>
+                            <td>@(string.IsNullOrEmpty(r.NotificationEmail) ? "operations@alamiot.com" : r.NotificationEmail)</td>
+                            <td>
+                                <span class="status-pill @(r.IsEnabled ? "online" : "offline")">
+                                    <span class="status-dot"></span>@(r.IsEnabled ? "Active" : "Disabled")
+                                </span>
+                            </td>
+                            <td style="text-align:right;">
+                                <button class="btn-icon-action delete" title="Delete Rule" @onclick="() => DeleteRule(r.Id)">🗑️</button>
+                            </td>
+                        </tr>
+                    }
                 }
             </tbody>
         </table>
     </div>
+
+    @if (Rules.Count > 0)
+    {
+        <div class="pagination-bar">
+            <div class="pagination-info">
+                Showing @((RulePage - 1) * RulePageSize + 1) to @(Math.Min(RulePage * RulePageSize, Rules.Count)) of @Rules.Count rules
+            </div>
+            <div class="pagination-controls">
+                <button class="pg-btn" disabled="@(RulePage <= 1)" @onclick="() => RulePage--">‹ Prev</button>
+                @for (int p = 1; p <= TotalRulePages; p++)
+                {
+                    var pageNum = p;
+                    <button class="pg-btn @(pageNum == RulePage ? "active" : "")" @onclick="() => RulePage = pageNum">@pageNum</button>
+                }
+                <button class="pg-btn" disabled="@(RulePage >= TotalRulePages)" @onclick="() => RulePage++">Next ›</button>
+            </div>
+        </div>
+    }
 </div>
 
 <!-- CREATE RULE MODAL -->
@@ -240,20 +294,60 @@
     private List<ScadaDemoTestApiClient.AlertRuleDto> Rules = new();
     private List<ScadaDemoTestApiClient.AttachedSensorDto> Sensors = new();
 
-    private static readonly Dictionary<string, string> MetricLabels = new()
+    private int IncidentPage = 1;
+    private const int IncidentPageSize = 10;
+    private int TotalIncidentPages => Math.Max(1, (int)Math.Ceiling(Incidents.Count / (double)IncidentPageSize));
+    private IEnumerable<ScadaDemoTestApiClient.AlertIncidentDto> PagedIncidents =>
+        Incidents.Skip((IncidentPage - 1) * IncidentPageSize).Take(IncidentPageSize);
+
+    private int RulePage = 1;
+    private const int RulePageSize = 10;
+    private int TotalRulePages => Math.Max(1, (int)Math.Ceiling(Rules.Count / (double)RulePageSize));
+    private IEnumerable<ScadaDemoTestApiClient.AlertRuleDto> PagedRules =>
+        Rules.Skip((RulePage - 1) * RulePageSize).Take(RulePageSize);
+
+    private static readonly Dictionary<string, string> MetricLabels = new(StringComparer.OrdinalIgnoreCase)
     {
         ["InstantaneousFlowRate"] = "Flow Rate",
+        ["FlowRate"] = "Flow Rate",
         ["AccumulatedTotalizer"] = "Totalizer",
+        ["Totalizer"] = "Totalizer",
         ["TemperatureC"] = "Temperature",
-        ["HumidityRH"] = "Humidity"
+        ["Temperature"] = "Temperature",
+        ["HumidityRH"] = "Humidity",
+        ["Humidity"] = "Humidity",
+        ["ActivePower"] = "Active Power",
+        ["Power"] = "Active Power",
+        ["TotalEnergy"] = "Total Energy",
+        ["Energy"] = "Total Energy",
+        ["Voltage"] = "Voltage",
+        ["Current"] = "Current",
+        ["Frequency"] = "Frequency",
+        ["PowerFactor"] = "Power Factor",
+        ["Pressure"] = "Pressure",
+        ["Level"] = "Level"
     };
 
-    private static readonly Dictionary<string, string> MetricUnits = new()
+    private static readonly Dictionary<string, string> MetricUnits = new(StringComparer.OrdinalIgnoreCase)
     {
         ["InstantaneousFlowRate"] = "m³/h",
+        ["FlowRate"] = "m³/h",
         ["AccumulatedTotalizer"] = "m³",
+        ["Totalizer"] = "m³",
         ["TemperatureC"] = "°C",
-        ["HumidityRH"] = "%RH"
+        ["Temperature"] = "°C",
+        ["HumidityRH"] = "%RH",
+        ["Humidity"] = "%RH",
+        ["ActivePower"] = "kW",
+        ["Power"] = "kW",
+        ["TotalEnergy"] = "kWh",
+        ["Energy"] = "kWh",
+        ["Voltage"] = "V",
+        ["Current"] = "A",
+        ["Frequency"] = "Hz",
+        ["PowerFactor"] = "PF",
+        ["Pressure"] = "bar",
+        ["Level"] = "%"
     };
 
     private string MetricLabel(string metric) =>
@@ -262,12 +356,23 @@
     private string MetricUnit(string metric) =>
         MetricUnits.TryGetValue(metric, out var u) ? $"({u})" : "";
 
+    private string GetTargetName(string? targetId)
+    {
+        if (string.IsNullOrWhiteSpace(targetId) || targetId == "ALL")
+            return "ALL Sensors (Plant-wide)";
+
+        var s = Sensors.FirstOrDefault(x => x.UniqueSensorId == targetId);
+        return s is not null ? $"{s.Name} (via {s.DeviceName})" : targetId;
+    }
+
     private readonly List<(string Key, string Label)> AllMetricOptions = new()
     {
         ("InstantaneousFlowRate", "Flow Rate (m³/h)"),
         ("AccumulatedTotalizer", "Totalizer (m³)"),
         ("TemperatureC", "Temperature (°C)"),
-        ("HumidityRH", "Humidity (%RH)")
+        ("HumidityRH", "Humidity (%RH)"),
+        ("ActivePower", "Active Power (kW)"),
+        ("TotalEnergy", "Total Energy (kWh)")
     };
 
     private List<(string Key, string Label)> AvailableMetrics
@@ -280,20 +385,69 @@
             var sensor = Sensors.FirstOrDefault(s => s.UniqueSensorId == NewRuleTarget);
             if (sensor is null) return AllMetricOptions;
 
-            return sensor.SensorTypeKey switch
+            var list = new List<(string Key, string Label)>();
+
+            // 1. Direct resolution from Driver Catalog:
+            var driver = SensorDriverCatalog.GetByKey(sensor.SensorTypeKey);
+            if (driver is not null)
             {
-                "AOSONG_AQ3485" => AllMetricOptions.Where(m => m.Key is "TemperatureC" or "HumidityRH").ToList(),
-                "KAIFENG_FLOWMETER" or "KAIFENG_EM_FLOWMETER" => AllMetricOptions.Where(m => m.Key is "InstantaneousFlowRate" or "AccumulatedTotalizer").ToList(),
-                _ => AllMetricOptions
-            };
+                var pCol = driver.PrimaryColumnName;
+                var sCol = driver.SecondaryColumnName;
+                var pUnit = !string.IsNullOrWhiteSpace(sensor.UnitPrimary) ? sensor.UnitPrimary : driver.UnitPrimary;
+                var sUnit = !string.IsNullOrWhiteSpace(sensor.UnitSecondary) ? sensor.UnitSecondary : driver.UnitSecondary;
+
+                list.Add((pCol, $"{MetricLabel(pCol)} ({pUnit})"));
+                list.Add((sCol, $"{MetricLabel(sCol)} ({sUnit})"));
+                return list;
+            }
+
+            // 2. Fallback heuristic from sensor type key / name:
+            var key = (sensor.SensorTypeKey ?? "").ToUpperInvariant();
+            if (key.Contains("AOSONG") || key.Contains("AQ3485") || key.Contains("TEMP") || key.Contains("HUMID"))
+            {
+                list.Add(("TemperatureC", $"Temperature ({sensor.UnitPrimary ?? "°C"})"));
+                list.Add(("HumidityRH", $"Humidity ({sensor.UnitSecondary ?? "%RH"})"));
+            }
+            else if (key.Contains("SELEC") || key.Contains("POWER") || key.Contains("ENERGY"))
+            {
+                list.Add(("ActivePower", $"Active Power ({sensor.UnitPrimary ?? "kW"})"));
+                list.Add(("TotalEnergy", $"Total Energy ({sensor.UnitSecondary ?? "kWh"})"));
+            }
+            else if (key.Contains("VORTEX"))
+            {
+                list.Add(("InstantaneousFlowRate", $"Flow Rate ({sensor.UnitPrimary ?? "m³/h"})"));
+                list.Add(("AccumulatedTotalizer", $"Totalizer ({sensor.UnitSecondary ?? "m³"})"));
+            }
+            else if (key.Contains("FLOW") || key.Contains("KAIFENG") || key.Contains("WATER") || key.Contains("GAS"))
+            {
+                list.Add(("InstantaneousFlowRate", $"Instantaneous Flow Rate ({sensor.UnitPrimary ?? "m³/h"})"));
+                list.Add(("AccumulatedTotalizer", $"Accumulated Totalizer ({sensor.UnitSecondary ?? "m³"})"));
+            }
+            else
+            {
+                // Dynamic fallback for any custom or future driver:
+                if (!string.IsNullOrWhiteSpace(sensor.UnitPrimary))
+                {
+                    list.Add(("InstantaneousFlowRate", $"{sensor.DriverDisplayName ?? "Primary Value"} ({sensor.UnitPrimary})"));
+                }
+                if (!string.IsNullOrWhiteSpace(sensor.UnitSecondary))
+                {
+                    list.Add(("AccumulatedTotalizer", $"{sensor.DriverDisplayName ?? "Secondary Value"} ({sensor.UnitSecondary})"));
+                }
+                if (list.Count == 0) list = AllMetricOptions;
+            }
+
+            return list;
         }
     }
 
     private void OnRuleTargetChanged(string? value)
     {
         NewRuleTarget = string.IsNullOrWhiteSpace(value) ? "ALL" : value;
-        var first = AvailableMetrics.FirstOrDefault();
-        if (first.Key != default) NewRuleMetric = first.Key;
+        var metrics = AvailableMetrics;
+        var first = metrics.FirstOrDefault();
+        NewRuleMetric = first.Key ?? "InstantaneousFlowRate";
+        StateHasChanged();
     }
 
     private int UnresolvedCount => Incidents.Count(i => !i.IsResolved);
@@ -317,11 +471,13 @@
 
     private async Task LoadDataAsync()
     {
-        var devices = await Api.GetGatewayDevicesAsync();
-        Sensors = new List<ScadaDemoTestApiClient.AttachedSensorDto>();
-        foreach (var d in devices)
+        try
         {
-            Sensors.AddRange(await Api.GetSensorsAsync(d.Id));
+            Sensors = (await Api.GetSensorsAsync()).OrderBy(s => s.DeviceName).ThenBy(s => s.Name).ToList();
+        }
+        catch
+        {
+            Sensors = new();
         }
         Incidents = await Api.GetAlertIncidentsAsync(50);
         Rules = await Api.GetAlertRulesAsync();
@@ -383,6 +539,17 @@
             return;
         }
 
+        // Fresh load of sensors so any newly added sensor shows up instantly:
+        try
+        {
+            Sensors = (await Api.GetSensorsAsync()).OrderBy(s => s.DeviceName).ThenBy(s => s.Name).ToList();
+        }
+        catch { }
+
+        NewRuleTarget = "ALL";
+        var first = AvailableMetrics.FirstOrDefault();
+        if (first.Key != default) NewRuleMetric = first.Key;
+
         IsRuleModalOpen = true;
     }
 
@@ -394,9 +561,11 @@
             return;
         }
 
+        var selectedSensor = Sensors.FirstOrDefault(s => s.UniqueSensorId == NewRuleTarget);
+
         var dto = new ScadaDemoTestApiClient.AlertRuleDto(
             Guid.Empty,
-            null,
+            selectedSensor?.DeviceId,
             NewRuleTarget,
             NewRuleMetric,
             NewRuleCondition,

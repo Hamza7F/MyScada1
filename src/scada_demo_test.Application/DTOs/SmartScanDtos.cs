@@ -4,7 +4,7 @@ namespace scada_demo_test.Application.DTOs;
 // The scanner is handed everything it needs (gateway IP/port, timeouts, the
 // address range to probe and the list of slave addresses already registered)
 // so it stays decoupled from EF and never touches the database - discovery
-// happens purely over Modbus.
+// happens purely over Modbus + the Dual-Guard In-Memory Pipeline.
 //
 // Passes <= 0 means "auto" (the scanner applies its own tiering + pass count).
 // DeepDuplicateCheck gates the two EXPENSIVE duplicate-detection reads (the
@@ -20,9 +20,10 @@ public record SmartScanRequest(
     int ProbeTimeoutMs,
     IReadOnlyList<int> SkipSlaveAddresses,
     int StartAddress = 1,
-    int EndAddress = 247,
+    int EndAddress = 255,
     int Passes = 0,
-    bool DeepDuplicateCheck = true);
+    bool DeepDuplicateCheck = true,
+    IReadOnlyDictionary<int, string>? RegisteredSlaveNames = null);
 
 // One possible driver match for a slave address, with the live values that
 // driver's own identification window decoded and whether that driver could
@@ -37,10 +38,9 @@ public record ScannedCandidateDto(
     bool ProofServed,
     bool BestGuess);
 
-// One meter discovered during the scan. Detected "on the fly" from its register
-// signature (start address + register map + plausibility of decoded values), with
-// NO database row created - the UI turns a found meter into a Sensor only when
-// the operator clicks "Map as Sensor".
+// Bucket 3 ("Found Box" / UniqueFoundDevices):
+// One meter discovered during the scan, verified by Dual-Guard + CheckpostRouter
+// and calculated via SensorDriverDispatcher ("Ghar" methods).
 public record ScannedMeterDto(
     int SlaveAddress,
     string? DriverKey,
@@ -56,17 +56,26 @@ public record ScannedMeterDto(
     double? LiveSecondary,
     string Status, // "identified" | "unknown"
     bool IsAmbiguous = false,
-    IReadOnlyList<ScannedCandidateDto>? Candidates = null);
+    IReadOnlyList<ScannedCandidateDto>? Candidates = null,
+    string? ProfileType = null,
+    string? RawHexPayload = null);
 
-// Two or more meters appear to share ONE slave address. The address's data is
-// permanently ambiguous, so it is excluded from Found and reported here instead.
-// DriverName is intentionally null (the hidden meter's type cannot be known for
-// sure); MeterCount is the accurately counted number of colliding families.
+// Bucket 1 (Guard 1 - DB Existence Guard / AlreadyInSystemDevices):
+// Slave address already registered in the database/system.
+public record AlreadyInSystemSlaveDto(
+    int SlaveAddress,
+    string? ExistingSensorName,
+    string Message);
+
+// Bucket 2 (Guard 2 - Current Scan Duplicate Guard / BlockedScanDuplicates):
+// Two or more meters appear to share ONE slave address during the scan session.
+// Excluded from Found Box and reported here instead.
 public record DuplicateSlaveIdConflictDto(
     int SlaveAddress,
     int MeterCount,
     string? DriverName,
-    string Message);
+    string Message,
+    List<string>? CollidingMeterNames = null);
 
 public record SmartScanResultDto(
     Guid DeviceId,
@@ -83,4 +92,5 @@ public record SmartScanResultDto(
     IReadOnlyList<ScannedMeterDto> Found,
     IReadOnlyList<int> SkippedSlaves,
     IReadOnlyList<int>? AmbiguousSlaves = null,
-    IReadOnlyList<DuplicateSlaveIdConflictDto>? DuplicateIdConflicts = null);
+    IReadOnlyList<DuplicateSlaveIdConflictDto>? DuplicateIdConflicts = null,
+    IReadOnlyList<AlreadyInSystemSlaveDto>? AlreadyInSystemSlaves = null);

@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -7,6 +8,7 @@ using scada_demo_test.Domain.Drivers;
 using scada_demo_test.Domain.Enums;
 using scada_demo_test.Domain.Interfaces;
 using scada_demo_test.Infrastructure.RealTime;
+using ScadaEngine.Core.Services;
 
 namespace scada_demo_test.Infrastructure.Modbus;
 
@@ -32,7 +34,7 @@ public class ModbusPollingHostedService : BackgroundService
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<ModbusPollingHostedService> _logger;
-    private readonly IReadOnlyDictionary<string, ISensorDriver> _drivers;
+    private readonly FrozenDictionary<string, ISensorDriver> _drivers;
     private readonly ModbusTcpMaster _master = new();
 
     // In-memory scheduling state (worker-local; DB is the source of truth on restart).
@@ -66,7 +68,7 @@ public class ModbusPollingHostedService : BackgroundService
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
-        _drivers = drivers.ToDictionary(d => d.DriverKey, d => d, StringComparer.OrdinalIgnoreCase);
+        _drivers = drivers.ToFrozenDictionary(d => d.DriverKey, d => d, StringComparer.OrdinalIgnoreCase);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -232,7 +234,7 @@ public class ModbusPollingHostedService : BackgroundService
 
             foreach (var sensor in dueSensors)
             {
-                if (sensor.SlaveAddress is < 1 or > 247)
+                if (sensor.SlaveAddress is < 1 or > 255)
                 {
                     await RecordOfflineAsync(telemetryRepo, sensor, ResolveDriver(sensor), "INVALID_SLAVE_ADDRESS", ct);
                     await MarkSensorAsync(sensorRepository, sensor, isOnline: false, ct, "INVALID_SLAVE_ADDRESS");
@@ -287,6 +289,28 @@ public class ModbusPollingHostedService : BackgroundService
                     }
 
                     payload = rawAll.ToArray();
+
+                    // Architectural Rule #1 & #2: Wrap raw payload in a Checkpost-verified
+                    // ModbusDevicePacket envelope and dispatch through the O(1) "Ghar" engine.
+                    var expectedProfile = CheckpostRouter.ResolveProfileByDriverKey(driver.DriverKey);
+                    var envelope = CheckpostRouter.InspectAndTag(
+                        (byte)sensor.SlaveAddress,
+                        payload,
+                        expectedProfile,
+                        driver.FunctionCode,
+                        driver.StartRegister,
+                        driver.RegisterQuantity);
+                    if (envelope is null)
+                    {
+                        throw new ModbusException("CheckpostRouter rejected corrupted/noise Modbus frame.");
+                    }
+                    var gharResult = SensorDriverCatalog.DispatchPacket(envelope);
+                    if (gharResult.IsValid)
+                    {
+                        primaryRaw ??= gharResult.PrimaryValue;
+                        secondaryRaw ??= gharResult.SecondaryValue;
+                    }
+
                     var primary = (primaryRaw ?? 0) * sensor.CalibrationMultiplier;
                     var secondary = (secondaryRaw ?? 0) * sensor.CalibrationMultiplier;
                     var tableName = sensor.TelemetryTableName ?? TelemetryTableNaming.Build(driver.SimpleName, sensor.Id);

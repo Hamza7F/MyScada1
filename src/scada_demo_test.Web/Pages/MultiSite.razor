@@ -42,16 +42,16 @@
 
             <div class="site-metrics-mini">
                 <div class="mini-stat">
-                    <span>Active Flowmeters</span>
-                    <strong>@(site.Code.Contains("LHE") ? "6" : site.Code.Contains("KHI") ? "4" : site.Code.Contains("FSD") ? "5" : "3") Online</strong>
+                    <span>Gateways Attached</span>
+                    <strong>@GetGatewayCount(site.Id) Gateway(s)</strong>
                 </div>
                 <div class="mini-stat">
-                    <span>Live Total Flow</span>
-                    <strong class="text-cyan">@(site.Code.Contains("LHE") ? "98.4" : site.Code.Contains("KHI") ? "76.2" : site.Code.Contains("FSD") ? "112.0" : "64.5") L/min</strong>
+                    <span>Field Sensors</span>
+                    <strong class="text-cyan">@GetSensorCount(site.Id) Registered</strong>
                 </div>
                 <div class="mini-stat">
-                    <span>Storage Reserve</span>
-                    <strong class="text-green">@(site.Code.Contains("LHE") ? "134,700" : site.Code.Contains("KHI") ? "85,000" : site.Code.Contains("FSD") ? "190,000" : "50,000") L</strong>
+                    <span>Live Streaming</span>
+                    <strong class="@(GetOnlineSensorCount(site.Id) > 0 ? "text-green" : "text-muted")">@GetOnlineSensorCount(site.Id) Online</strong>
                 </div>
             </div>
 
@@ -105,6 +105,8 @@
 
 @code {
     private List<ScadaDemoTestApiClient.SiteDto> Sites = new();
+    private List<ScadaDemoTestApiClient.GatewayDeviceDto> Gateways = new();
+    private List<ScadaDemoTestApiClient.AttachedSensorDto> AllSensors = new();
     private Guid? SelectedSiteId = null;
 
     private bool IsAddModalOpen = false;
@@ -124,7 +126,21 @@
     private async Task LoadSitesAsync()
     {
         Sites = await Api.GetSitesAsync();
+        Gateways = await Api.GetGatewayDevicesAsync();
+        AllSensors = await Api.GetSensorsAsync();
         if (Sites.Count > 0 && !SelectedSiteId.HasValue) SelectedSiteId = Sites[0].Id;
+    }
+
+    private int GetGatewayCount(Guid siteId) => Gateways.Count(g => g.SiteId == siteId);
+    private int GetSensorCount(Guid siteId)
+    {
+        var gwIds = Gateways.Where(g => g.SiteId == siteId).Select(g => g.Id).ToHashSet();
+        return AllSensors.Count(s => gwIds.Contains(s.DeviceId));
+    }
+    private int GetOnlineSensorCount(Guid siteId)
+    {
+        var gwIds = Gateways.Where(g => g.SiteId == siteId).Select(g => g.Id).ToHashSet();
+        return AllSensors.Count(s => gwIds.Contains(s.DeviceId) && s.IsOnline);
     }
 
     private async Task<bool> CheckPermissionAsync(string actionPermission)

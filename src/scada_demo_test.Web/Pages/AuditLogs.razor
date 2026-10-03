@@ -73,6 +73,25 @@
             </tbody>
         </table>
     </div>
+
+    @if (TotalCount > 0)
+    {
+        var totalPages = Math.Max(1, (int)Math.Ceiling(TotalCount / 10.0));
+        <div class="pagination-bar">
+            <div class="pagination-info">
+                Showing @((CurrentPage - 1) * 10 + 1) to @(Math.Min(CurrentPage * 10, TotalCount)) of @TotalCount logs
+            </div>
+            <div class="pagination-controls">
+                <button class="pg-btn" disabled="@(CurrentPage <= 1)" @onclick="() => ChangePageAsync(CurrentPage - 1)">‹ Prev</button>
+                @for (int p = 1; p <= totalPages; p++)
+                {
+                    var pageNum = p;
+                    <button class="pg-btn @(pageNum == CurrentPage ? "active" : "")" @onclick="() => ChangePageAsync(pageNum)">@pageNum</button>
+                }
+                <button class="pg-btn" disabled="@(CurrentPage >= totalPages)" @onclick="() => ChangePageAsync(CurrentPage + 1)">Next ›</button>
+            </div>
+        </div>
+    }
 </div>
 
 @code {
@@ -88,15 +107,23 @@
 
     private async Task LoadLogsAsync()
     {
-        var result = await Api.GetAuditLogsAsync(SearchQuery, CurrentPage, 50);
+        var result = await Api.GetAuditLogsAsync(SearchQuery, CurrentPage, 10);
         Logs = result.Items;
         TotalCount = result.Total;
+    }
+
+    private async Task ChangePageAsync(int page)
+    {
+        if (page < 1) return;
+        CurrentPage = page;
+        await LoadLogsAsync();
     }
 
     private async Task HandleKeyDown(KeyboardEventArgs e)
     {
         if (e.Key == "Enter")
         {
+            CurrentPage = 1;
             await LoadLogsAsync();
         }
     }

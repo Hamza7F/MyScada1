@@ -12,6 +12,7 @@
     <!-- Supabase/Postgres provider commented out 2026-09-22 (revert path: DB_LOCAL_SWITCH_CHANGELOG.md) -->
     <!-- <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" /> -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.11" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.11" />
     <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="10.0.11" />
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Core" Version="1.2.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="9.0.0" />

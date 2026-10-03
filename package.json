@@ -1,0 +1,10 @@
+{
+  "name": "scada-demo-dotnet-runner",
+  "private": true,
+  "scripts": {
+    "dev": "bash -c 'export PATH=/root/.dotnet:$PATH; ASPNETCORE_ENVIRONMENT=Development dotnet exec /app/applet/src/scada_demo_test.API/bin/Debug/net10.0/scada_demo_test.API.dll --urls http://0.0.0.0:5080 --contentRoot /app/applet/src/scada_demo_test.API & ASPNETCORE_ENVIRONMENT=Development exec dotnet exec /app/applet/src/scada_demo_test.Web/bin/Debug/net10.0/scada_demo_test.Web.dll --urls http://0.0.0.0:3000 --contentRoot /app/applet/src/scada_demo_test.Web'",
+    "build": "export PATH=/root/.dotnet:$PATH && dotnet build src/scada_demo_test.API/scada_demo_test.API.csproj && dotnet build src/scada_demo_test.Web/scada_demo_test.Web.csproj",
+    "start": "bash -c 'export PATH=/root/.dotnet:$PATH; ASPNETCORE_ENVIRONMENT=Development dotnet exec /app/applet/src/scada_demo_test.API/bin/Debug/net10.0/scada_demo_test.API.dll --urls http://0.0.0.0:5080 --contentRoot /app/applet/src/scada_demo_test.API & ASPNETCORE_ENVIRONMENT=Development exec dotnet exec /app/applet/src/scada_demo_test.Web/bin/Debug/net10.0/scada_demo_test.Web.dll --urls http://0.0.0.0:3000 --contentRoot /app/applet/src/scada_demo_test.Web'",
+    "lint": "echo 'DotNet 10 C# Solution'"
+  }
+}

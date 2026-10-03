@@ -1,10 +1,15 @@
+using System.Collections.Frozen;
+using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
+using ScadaEngine.Core.Drivers;
+using ScadaEngine.Core.Models;
 
 namespace scada_demo_test.Domain.Drivers;
 
 // Registry of every driver installed in this platform. The UI reads this catalog
 // to render the "Sensor Library" dropdown; the polling worker uses it to resolve
 // DriverKey -> parse logic; the schema engine uses it to build telemetry tables.
+// Uses an O(1) FrozenDictionary for microsecond-latency in-memory lookups.
 public static class SensorDriverCatalog
 {
     private static readonly ISensorDriver[] AllDrivers =
@@ -16,15 +21,29 @@ public static class SensorDriverCatalog
         new SelecPowerMeterDriver()
     };
 
+    private static readonly FrozenDictionary<string, ISensorDriver> DriversByKey =
+        AllDrivers.ToFrozenDictionary(d => d.DriverKey, d => d, StringComparer.OrdinalIgnoreCase);
+
     public static IReadOnlyList<ISensorDriver> Drivers => AllDrivers;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ISensorDriver? GetByKey(string driverKey) =>
-        AllDrivers.FirstOrDefault(d =>
-            string.Equals(d.DriverKey, driverKey, StringComparison.OrdinalIgnoreCase));
+        !string.IsNullOrWhiteSpace(driverKey) && DriversByKey.TryGetValue(driverKey, out var driver)
+            ? driver
+            : null;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ISensorDriver RequireByKey(string driverKey) =>
         GetByKey(driverKey)
         ?? throw new InvalidOperationException($"No sensor driver registered with key '{driverKey}'.");
+
+    /// <summary>
+    /// Dispatches a Checkpost-verified <see cref="ModbusDevicePacket"/> envelope strictly to its
+    /// designated driver calculation logic ("Ghar") in O(1) microsecond time.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DriverCalculationResult DispatchPacket(ModbusDevicePacket packet) =>
+        SensorDriverDispatcher.Dispatch(packet);
 }
 
 // Builds and validates the isolated per-sensor telemetry table name.
@@ -40,7 +59,7 @@ public static class TelemetryTableNaming
         var name = $"telemetry_sensor_{type}_{suffix}";
         if (!IsSafeTableName(name))
         {
-            throw new InvalidOperationException($"Generated telemetry table name '{name}' is not a safe PostgreSQL identifier.");
+            throw new InvalidOperationException($"Generated telemetry table name '{name}' is not a safe SQL identifier.");
         }
         return name;
     }

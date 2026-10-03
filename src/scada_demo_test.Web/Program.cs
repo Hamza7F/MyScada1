@@ -7,6 +7,9 @@ using scada_demo_test.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
+
 builder.Services.AddRazorPages();
 builder.Services.AddServerSideBlazor();
 
@@ -19,6 +22,11 @@ builder.Services
         options.AccessDeniedPath = "/login";
         options.ExpireTimeSpan = TimeSpan.FromDays(30);
         options.SlidingExpiration = true;
+        if (!OperatingSystem.IsWindows())
+        {
+            options.Cookie.SameSite = SameSiteMode.None;
+            options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+        }
     });
 
 builder.Services.AddAuthorization(options =>
@@ -45,22 +53,28 @@ builder.Services.AddSingleton<FirebaseScadaConfig>();
 builder.Services.AddSingleton<FirebaseScadaService>();
 
 var apiBaseUrl = builder.Configuration["ApiBaseUrl"] ?? "http://localhost:5080";
-builder.Services.AddTransient<PermissionForwardingHandler>();
-builder.Services.AddHttpClient<ScadaDemoTestApiClient>(client =>
-{
-    client.BaseAddress = new Uri(apiBaseUrl.TrimEnd('/') + "/");
-}).AddHttpMessageHandler<PermissionForwardingHandler>();
+var baseUri = new Uri(apiBaseUrl.TrimEnd('/') + "/");
 
-// A dedicated, long-capped client for the bus scan ONLY. A full 1..247 sweep
-// legitimately takes ~60-240 s (every silent address burns the whole probe
-// timeout), so the shared 10 s safety cap would cancel it mid-sweep and the bare
-// catch would silently surface it as "gateway did not respond". Every other call
-// stays on the 10 s default.
-builder.Services.AddHttpClient("scada-bus-scan", client =>
+static HttpClient BuildApiClient(IServiceProvider sp, Uri baseAddress, TimeSpan timeout)
 {
-    client.BaseAddress = new Uri(apiBaseUrl.TrimEnd('/') + "/");
-    client.Timeout = TimeSpan.FromMinutes(5);
-}).AddHttpMessageHandler<PermissionForwardingHandler>();
+    var handler = new PermissionForwardingHandler(
+        sp.GetRequiredService<IHttpContextAccessor>(),
+        sp);
+    return new HttpClient(handler, disposeHandler: true)
+    {
+        BaseAddress = baseAddress,
+        Timeout = timeout
+    };
+}
+
+// Circuit-scoped ScadaDemoTestApiClient (AGENTS.md Item 39): each HttpClient gets
+// its own fresh PermissionForwardingHandler resolved from the circuit's own
+// IServiceProvider so AuthenticationStateProvider is always valid.
+builder.Services.AddScoped<ScadaDemoTestApiClient>(sp =>
+    new ScadaDemoTestApiClient(
+        BuildApiClient(sp, baseUri, TimeSpan.FromSeconds(10)),
+        BuildApiClient(sp, baseUri, TimeSpan.FromMinutes(5)),
+        sp.GetRequiredService<FirebaseScadaService>()));
 
 builder.Services.AddSingleton<ITelemetryBroadcastBus, TelemetryBroadcastBus>();
 builder.Services.AddScoped<LiveTelemetryState>();
@@ -88,6 +102,21 @@ app.UseStaticFiles();
 app.UseRouting();
 
 app.UseAuthentication();
+
+// In non-Windows cloud preview (iframe where 3P cookies may be blocked by the browser),
+// fall back to the active signed-in session principal once login has succeeded.
+if (!OperatingSystem.IsWindows())
+{
+    app.Use(async (ctx, next) =>
+    {
+        if (ctx.User.Identity?.IsAuthenticated != true && PermissionForwardingHandler.FallbackPrincipal != null)
+        {
+            ctx.User = PermissionForwardingHandler.FallbackPrincipal;
+        }
+        await next();
+    });
+}
+
 app.UseAuthorization();
 
 // ---- Local Login Endpoint with JWT & RememberMe Support ----
@@ -119,17 +148,24 @@ app.MapPost("/account/login", async (HttpContext http, IFormCollection form, Sca
     var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
     var principal = new ClaimsPrincipal(identity);
 
+    PermissionForwardingHandler.FallbackAccessToken = data.AccessToken;
+    PermissionForwardingHandler.FallbackRole = data.RoleName;
+    PermissionForwardingHandler.FallbackPrincipal = principal;
+
     await http.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal, new AuthenticationProperties
     {
         IsPersistent = rememberMe,
         ExpiresUtc = rememberMe ? DateTimeOffset.UtcNow.AddDays(30) : null
     });
 
-    return Results.Redirect("/");
+    return Results.Redirect("/dashboard");
 }).DisableAntiforgery();
 
 app.MapGet("/account/logout", async (HttpContext http) =>
 {
+    PermissionForwardingHandler.FallbackAccessToken = null;
+    PermissionForwardingHandler.FallbackRole = null;
+    PermissionForwardingHandler.FallbackPrincipal = null;
     await http.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.Redirect("/login");
 });

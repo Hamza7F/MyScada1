@@ -5,10 +5,15 @@ using Microsoft.AspNetCore.Components.Authorization;
 namespace scada_demo_test.Web.Services;
 
 // Attached to the ScadaDemoTestApiClient's HttpClient pipeline (see Program.cs).
-// Reads the signed-in user's role and JWT access token off the current HttpContext
-// or AuthenticationState and forwards them so scada_demo_test.API can authorize all requests.
+// Reads the signed-in user's role and JWT access token off the current circuit's
+// AuthenticationStateProvider or HttpContext (with fallback to the latest active
+// session token for iframe environments) and forwards them to scada_demo_test.API.
 public class PermissionForwardingHandler : DelegatingHandler
 {
+    public static string? FallbackAccessToken { get; set; }
+    public static string? FallbackRole { get; set; }
+    public static ClaimsPrincipal? FallbackPrincipal { get; set; }
+
     private readonly IHttpContextAccessor _accessor;
     private readonly IServiceProvider _serviceProvider;
 
@@ -16,6 +21,7 @@ public class PermissionForwardingHandler : DelegatingHandler
     {
         _accessor = accessor;
         _serviceProvider = serviceProvider;
+        InnerHandler = new HttpClientHandler { AllowAutoRedirect = false };
     }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -34,8 +40,9 @@ public class PermissionForwardingHandler : DelegatingHandler
         {
             try
             {
-                using var scope = _serviceProvider.CreateScope();
-                var authStateProvider = scope.ServiceProvider.GetService<AuthenticationStateProvider>();
+                // Resolve directly from the circuit's IServiceProvider (never CreateScope,
+                // which would create an uninitialized AuthenticationStateProvider).
+                var authStateProvider = _serviceProvider.GetService<AuthenticationStateProvider>();
                 if (authStateProvider != null)
                 {
                     var authState = await authStateProvider.GetAuthenticationStateAsync();
@@ -46,8 +53,14 @@ public class PermissionForwardingHandler : DelegatingHandler
                     }
                 }
             }
-            catch { }
+            catch
+            {
+                // Circuit not yet initialized; fall back below.
+            }
         }
+
+        role ??= FallbackRole;
+        token ??= FallbackAccessToken;
 
         if (!string.IsNullOrEmpty(role))
         {

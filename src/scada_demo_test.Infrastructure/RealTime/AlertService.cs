@@ -29,11 +29,14 @@ public class AlertService
         try
         {
             var rules = await _db.AlertRules
-                .Where(r => r.IsEnabled && (r.DeviceExternalId == "ALL" || r.DeviceExternalId == deviceExternalId) && r.Metric == metric)
+                .Where(r => r.IsEnabled && (r.DeviceExternalId == "ALL" || r.DeviceExternalId == deviceExternalId))
                 .ToListAsync(ct);
 
             foreach (var rule in rules)
             {
+                if (!IsMetricMatch(rule.Metric, metric))
+                    continue;
+
                 bool triggered = false;
                 if (rule.Condition == "GreaterThan" && value > rule.ThresholdValue) triggered = true;
                 else if (rule.Condition == "LessThan" && value < rule.ThresholdValue) triggered = true;
@@ -47,6 +50,7 @@ public class AlertService
 
                     if (!recentUnresolved)
                     {
+                        var displayMetric = GetDisplayMetric(metric);
                         var incident = new AlertIncident
                         {
                             Id = Guid.NewGuid(),
@@ -56,7 +60,7 @@ public class AlertService
                             Metric = metric,
                             TriggerValue = value,
                             Severity = rule.Severity,
-                            Message = $"{deviceName} {metric} is {value:F2} (threshold: {rule.ThresholdValue:F2})",
+                            Message = $"{deviceName} {displayMetric} is {value:F2} (threshold: {rule.ThresholdValue:F2})",
                             TriggeredAt = DateTime.UtcNow,
                             IsResolved = false
                         };
@@ -78,6 +82,54 @@ public class AlertService
         {
             _logger.LogError(ex, "Error evaluating alerts for {Device} {Metric}", deviceExternalId, metric);
         }
+    }
+
+    private static bool IsMetricMatch(string ruleMetric, string incomingMetric)
+    {
+        if (string.Equals(ruleMetric, incomingMetric, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var r = NormalizeMetricName(ruleMetric);
+        var i = NormalizeMetricName(incomingMetric);
+        return string.Equals(r, i, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeMetricName(string m)
+    {
+        if (string.IsNullOrWhiteSpace(m)) return string.Empty;
+        var s = m.Trim().ToLowerInvariant();
+        return s switch
+        {
+            "flowrate" or "flow" or "instantaneousflowrate" or "instantaneous_flow_rate" => "flowrate",
+            "totalizer" or "accumulatedtotalizer" or "total" or "accumulated_totalizer" => "totalizer",
+            "temp" or "temperature" or "temperaturec" or "temperature_c" => "temperature",
+            "humidity" or "humidityrh" or "humidity_rh" or "rh" => "humidity",
+            "activepower" or "power" or "active_power" or "kw" => "activepower",
+            "totalenergy" or "energy" or "total_energy" or "kwh" => "totalenergy",
+            "voltage" or "volt" => "voltage",
+            "current" or "amp" or "ampere" => "current",
+            "frequency" or "freq" or "hz" => "frequency",
+            "pressure" or "bar" or "psi" => "pressure",
+            _ => s
+        };
+    }
+
+    private static string GetDisplayMetric(string metric)
+    {
+        return NormalizeMetricName(metric) switch
+        {
+            "flowrate" => "Flow Rate",
+            "totalizer" => "Totalizer",
+            "temperature" => "Temperature",
+            "humidity" => "Humidity",
+            "activepower" => "Active Power",
+            "totalenergy" => "Total Energy",
+            "voltage" => "Voltage",
+            "current" => "Current",
+            "frequency" => "Frequency",
+            "pressure" => "Pressure",
+            _ => metric
+        };
     }
 
     private async Task SendEmailAsync(AlertRule rule, AlertIncident incident, CancellationToken ct)

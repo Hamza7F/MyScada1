@@ -26,7 +26,16 @@ builder.Logging.AddDebug();
 // builder.Services.AddDbContext<MyDbContextDxy>(options =>
 //     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 builder.Services.AddDbContext<MyDbContextDxy>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+{
+    if (OperatingSystem.IsWindows())
+    {
+        options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"));
+    }
+    else
+    {
+        options.UseSqlite("Data Source=scada_db_iiot.sqlite");
+    }
+});
 
 // ---- Identity: Users/Roles/RolePermissions ----
 builder.Services.AddIdentity<AppUser, AppRole>(options =>
@@ -118,6 +127,9 @@ builder.Services.AddSingleton<ISensorDriver, SelecPowerMeterDriver>();
 // ---- IIoT Modbus polling engine: polls gateways & streams to per-sensor tables ----
 builder.Services.AddHostedService<ModbusPollingHostedService>();
 
+// ---- Virtual Modbus TCP Gateway Emulator (Disabled for pure physical hardware production mode) ----
+// builder.Services.AddHostedService<VirtualModbusGatewayServer>();
+
 // ---- Tiered rollup/compression pipeline: raw -> hourly -> daily -> monthly ----
 builder.Services.AddHostedService<RollupCompressionHostedService>();
 
@@ -199,11 +211,18 @@ static async Task InitializeDatabaseAsync(IServiceProvider services)
 
     try
     {
-        // MigrateAsync alone handles both a fresh database and an already-migrated
-        // one. The old Supabase-era "stamp legacy history" baseline is gone: it
-        // inserted InitialPostgres into __EFMigrationsHistory on every boot where
-        // AlertIncidents existed, which polluted the history on the local DB.
-        await db.Database.MigrateAsync();
+        if (db.Database.IsSqlite())
+        {
+            await db.Database.EnsureCreatedAsync();
+        }
+        else
+        {
+            // MigrateAsync alone handles both a fresh database and an already-migrated
+            // one. The old Supabase-era "stamp legacy history" baseline is gone: it
+            // inserted InitialPostgres into __EFMigrationsHistory on every boot where
+            // AlertIncidents existed, which polluted the history on the local DB.
+            await db.Database.MigrateAsync();
+        }
     }
     catch (Exception ex)
     {

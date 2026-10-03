@@ -311,7 +311,7 @@ else
                             <input class="custom-input" @bind="SensorName" placeholder="e.g. Boiler Steam Flowmeter" />
                         </div>
                         <div class="form-group">
-                            <label>Modbus Slave Address (1-247)</label>
+                            <label>Modbus Slave Address (1-255)</label>
                             <input type="number" class="custom-input" @bind="SensorSlaveAddr" @bind:after="UpdateSlaveCheck" />
                         </div>
                         <div class="form-group">
@@ -483,31 +483,38 @@ else
         DeviceSensorCache.TryGetValue(SelectedDeviceGuid, out var list) ? list : null;
 
     private System.Threading.Timer? _timer;
+    private bool _disposed;
 
     protected override async Task OnInitializedAsync()
     {
         await LoadDevicesAsync();
         SensorLibraries = await Api.GetSensorLibrariesAsync();
 
-        // 1-second rapid live refresh interval for instant status updates
+        // 3-second live refresh interval for responsive status updates
         _timer = new System.Threading.Timer(async _ =>
         {
-            await InvokeAsync(async () =>
+            if (_disposed) return;
+            try
             {
-                await LoadDevicesAsync();
-                if (ExpandedDeviceId is Guid eid && ExpandedSensors.ContainsKey(eid))
+                await InvokeAsync(async () =>
                 {
-                    try
+                    if (_disposed) return;
+                    await LoadDevicesAsync();
+                    if (ExpandedDeviceId is Guid eid && ExpandedSensors.ContainsKey(eid))
                     {
-                        var fresh = await Api.GetSensorsAsync(eid);
-                        ExpandedSensors[eid] = fresh;
-                        DeviceSensorCache[eid] = fresh;
+                        try
+                        {
+                            var fresh = await Api.GetSensorsAsync(eid);
+                            ExpandedSensors[eid] = fresh;
+                            DeviceSensorCache[eid] = fresh;
+                        }
+                        catch { }
                     }
-                    catch { }
-                }
-                StateHasChanged();
-            });
-        }, null, 1000, 1000);
+                    if (!_disposed) StateHasChanged();
+                });
+            }
+            catch { /* circuit closed */ }
+        }, null, 1000, 3000);
     }
 
     private async Task LoadDevicesAsync()
@@ -643,9 +650,9 @@ else
     private void UpdateSlaveCheck()
     {
         SensorSlaveCheckMessage = null;
-        if (SensorSlaveAddr is < 1 or > 247)
+        if (SensorSlaveAddr is < 1 or > 255)
         {
-            SensorSlaveCheckMessage = "Modbus slave address must be between 1 and 247.";
+            SensorSlaveCheckMessage = "Modbus slave address must be between 1 and 255.";
             return;
         }
 
@@ -831,6 +838,7 @@ else
 
     public void Dispose()
     {
+        _disposed = true;
         _timer?.Dispose();
     }
 }

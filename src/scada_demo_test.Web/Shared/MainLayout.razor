@@ -11,10 +11,13 @@
     <div class="alert-toast-stack">
         @foreach (var toast in _alertToasts)
         {
-            <div class="alert-toast @SeverityCss(toast.Incident.Severity)">
-                <div class="alert-toast-title">
-                    <span class="alert-toast-dot"></span>
-                    @toast.Incident.Severity alert - @toast.Incident.DeviceName
+            <div class="alert-toast @SeverityCss(toast.Incident.Severity)" @onclick="() => DismissToast(toast.Id)" style="cursor: pointer;" title="Click to dismiss">
+                <div class="alert-toast-header">
+                    <div class="alert-toast-title">
+                        <span class="alert-toast-dot"></span>
+                        @toast.Incident.Severity alert - @toast.Incident.DeviceName
+                    </div>
+                    <button type="button" class="alert-toast-close" @onclick:stopPropagation="true" @onclick="() => DismissToast(toast.Id)" title="Close">&times;</button>
                 </div>
                 <div class="alert-toast-msg">@toast.Incident.Message</div>
                 <div class="alert-toast-time">@toast.Timestamp.ToLocalTime().ToString("HH:mm:ss")</div>
@@ -45,6 +48,12 @@
 
     private readonly record struct AlertToast(Guid Id, LiveTelemetryState.AlertIncidentDto Incident, DateTime Timestamp);
     private readonly List<AlertToast> _alertToasts = new();
+
+    private void DismissToast(Guid id)
+    {
+        _alertToasts.RemoveAll(t => t.Id == id);
+        StateHasChanged();
+    }
 
     private static string SeverityCss(string severity) => severity.ToLowerInvariant() switch
     {

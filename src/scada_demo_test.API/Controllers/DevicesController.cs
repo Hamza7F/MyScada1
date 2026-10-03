@@ -51,7 +51,8 @@ public class DevicesController : ControllerBase
         int SensorCount,
         bool IsOnline,
         DateTime? LastSeenAt,
-        DateTime? CreatedAt);
+        DateTime? CreatedAt,
+        Guid? SiteId = null);
 
     public record CreateDeviceRequest(
         string Name,
@@ -101,7 +102,10 @@ public class DevicesController : ControllerBase
             return BadRequest(new { message = "This gateway has no IP address configured; set it before scanning the bus." });
 
         var attached = await _sensors.GetByDeviceIdAsync(id);
-        var skip = attached.Select(s => s.SlaveAddress).ToList();
+        var skip = attached.Select(s => s.SlaveAddress).Distinct().ToList();
+        var registeredNames = attached
+            .GroupBy(s => s.SlaveAddress)
+            .ToDictionary(g => g.Key, g => g.First().Name);
 
         var result = await _scanner.ScanAsync(new SmartScanRequest(
             device.Id,
@@ -112,9 +116,10 @@ public class DevicesController : ControllerBase
             req?.ProbeTimeoutMs ?? 200,
             skip,
             req?.StartAddress ?? 1,
-            req?.EndAddress ?? 247,
+            req?.EndAddress ?? 255,
             req?.Passes ?? 0,
-            req?.DeepDuplicateCheck ?? true));
+            req?.DeepDuplicateCheck ?? true,
+            registeredNames));
 
         await AuditAsync("Device.Scan", device, $"Smart-scanned RS-485 bus of '{device.Name}' ({device.ExternalId}) @ {device.IpAddress}:{device.Port}: {result.RespondingSlaves} responder(s), {result.UnknownResponders} unidentified");
 
@@ -327,7 +332,8 @@ public class DevicesController : ControllerBase
         sensorCount,
         d.IsOnline,
         d.LastSeenAt,
-        d.CreatedAt);
+        d.CreatedAt,
+        d.SiteId);
 
     private static string HardwareTypeName(DeviceHardwareType type) => type switch
     {

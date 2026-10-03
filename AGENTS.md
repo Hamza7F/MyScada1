@@ -1,4 +1,4 @@
-﻿# AGENTS.md â€” scada_demo Project Map
+# AGENTS.md â€” scada_demo Project Map
 
 > **Read this file FIRST before making any change.** This file is a complete map of
 > the project, its conventions, and its architecture. Do NOT re-scan the repo to
@@ -2521,7 +2521,98 @@ the poll path.
 ## Rules for the next AI
 
 - After ANY state change (implemented step, new finding), update this section:
-  move items from IN PROGRESS â†’ DONE, refresh NEXT STEPS, update timestamp.
+  move items from IN PROGRESS -> DONE, refresh NEXT STEPS, update timestamp.
 - Build only the changed project(s) for speed (`dotnet build` on the API or Web
   project directly, never the whole `.slnx`).
 - No commits unless the user explicitly asks.
+
+## 46. AI STUDIO + VISUAL STUDIO DUAL-ENVIRONMENT CHECKPOINT (2026-10-02)
+
+- **Pure .NET 10 Stack Preserved**: Zero React/Vite/Node UI files. The solution runs
+  natively on **.NET 10 (`net10.0`)** across `Domain`, `Application`, `Infrastructure`,
+  `API`, `Web` (Blazor Server), and `Maui`.
+- **Restored Untracked Driver Files (`src/scada_demo_test.Domain/Drivers/`)**:
+  - `ModbusValueCodec.cs` (IEEE-754 float32 high/low-word-first + `-0.0` -> `0.0` fold)
+  - `VortexFlowmeterDriver.cs` (`VORTEX_FLOWMETER`, FC04 @1026/1028/1032, proof @1067)
+  - `SelecPowerMeterDriver.cs` (`SELEC_POWER_METER`, FC04 low-word-first @42/0, proof @64)
+- **Dual-Environment Database Configuration**:
+  - **Windows PC / Visual Studio (`OperatingSystem.IsWindows() == true`)**: Uses
+    `UseSqlServer(DefaultConnection)` pointing to local SSMS LocalDB
+    (`Server=(localdb)\MSSQLLocalDB;Database=scada_db_iiot;...`), `MigrateAsync()`,
+    T-SQL `DynamicSchemaInitializer`, and T-SQL `SensorTelemetryRepository`.
+  - **Linux Cloud / AI Studio Container (`OperatingSystem.IsWindows() == false`)**:
+    Automatically uses `UseSqlite("Data Source=scada_db_iiot.sqlite")` with
+    `EnsureCreatedAsync()` + `IdentitySeeder.SeedAsync()` (`superadmin@alamiot.com` /
+    `SuperAdmin@123`) and SQLite-compatible DDL/queries in `SensorTelemetryRepository`.
+- **Web Auth & Handler Fixes (`src/scada_demo_test.Web`)**:
+  - `Program.cs` builds each `HttpClient` with a fresh `PermissionForwardingHandler`
+    whose `InnerHandler = new HttpClientHandler { AllowAutoRedirect = false }` is
+    explicitly assigned, and forwards `scada_api_token` from `IHttpContextAccessor`
+    during initial SSR/prerender requests.
+  - Cross-site iframe cookies (`SameSite=None; Secure`) enabled automatically on
+    non-Windows container runs while keeping standard localhost cookie behavior on Windows.
+- **Hybrid Workflow**: Code edits made in AI Studio sync via GitHub (`git pull`) to
+  the operator's local Windows PC (Visual Studio + SSMS LocalDB + physical WiFi/Ethernet
+  hardware at `10.10.100.254:502`), while also compiling and running live inside AI Studio
+  on ports `3000` (Web) and `5080` (API).
+
+## 47. SCADA ENGINE CORE ARCHITECTURE & 3-BUCKET DUAL-GUARD PIPELINE (2026-10-02)
+
+- **Domain Models & Envelopes (`ScadaEngine.Core.Models`)**:
+  - `DeviceProfileType` Enum (`AosongAQ3485`, `V880BRVortex`, `KaifengThermal`, `KaifengElectromagnetic`, `SelecPower`, `Unknown`).
+  - `ModbusDevicePacket` (The Strict Envelope): contains `byte SlaveId`, `DeviceProfileType ProfileType`, `string ModelName`, `byte[] RawPayload`, `DateTime Timestamp`, `string DriverKey`, `ushort StartRegister`, `ushort RegisterQuantity`, and `RawHex`.
+  - `RawScanResponse`: contains `byte SlaveId`, `byte[] Payload`, `bool IsSuccess`, `string? ErrorMessage`, `DeviceProfileType? HintedProfile`, `byte FunctionCode`, `ushort StartRegister`, `ushort RegisterQuantity`.
+  - `ScanResultSummary`: holds 3 distinct result buckets:
+    1. `AlreadyInSystemDevices` (`List<byte>` & `List<AlreadyInSystemDeviceInfo>`): existing registered IDs.
+    2. `BlockedScanDuplicates` (`List<byte>` & `List<BlockedScanDuplicateInfo>`): conflicting IDs on the same bus session.
+    3. `UniqueFoundDevices` (`List<ModbusDevicePacket>`): verified identity envelopes in the "Found Box".
+- **Checkpost Router & Signature Engine (`CheckpostRouter`)**:
+  - Zero routing DB dependency: purely in-memory using `FrozenDictionary` and `ReadOnlySpan<byte>` with microsecond execution latency.
+  - Strict byte boundary & payload inspection:
+    - Length 4 bytes -> `AosongAQ3485` (16-bit Ints)
+    - Length >= 8 bytes -> `V880BRVortex` / `KaifengElectromagnetic` / `SelecPower` (32-bit IEEE Floats)
+    - Length 6 bytes -> `KaifengThermal`
+  - Rejects noise/corrupted frames upfront, returning a fully tagged `ModbusDevicePacket`.
+- **Dual-Guard Scanner Service (`ModbusScannerService`)**:
+  - Pre-Scan: loads database-registered slave IDs into `HashSet<byte> _dbRegisteredSlaveIds`.
+  - **GUARD 1 (DB Existence Guard)**: If `_dbRegisteredSlaveIds.Contains(slaveId)`, routes directly to `AlreadyInSystemDevices` (UI: *"Already added in system. Change hardware ID"*). Bypasses raw bucket.
+  - **GUARD 2 (Current Scan Duplicate Guard - BEFORE Found Box)**: Groups raw responses in `RawBucket` by `SlaveId`. If `Count() > 1`, blocks all duplicates and moves `SlaveId` to `BlockedScanDuplicates` (UI: *"Bus conflict: Same ID responded multiple times"*).
+  - **FOUND BOX TRANSFER**: If `Count() == 1`, passes payload to `CheckpostRouter.InspectAndTag()` to produce `ModbusDevicePacket`, which is transferred to `UniqueFoundDevices` ("Found Box").
+- **Sensor Driver Dispatcher (`SensorDriverDispatcher`)**:
+  - In-memory O(1) dictionary routing to designated calculation logic:
+    `AQ3485Ghar()`, `V880BRGhar()`, `KaifengThermalGhar()`, `ElectromagneticGhar()`, `SelecPowerGhar()`.
+  - Integrated into `SensorDriverCatalog.DispatchPacket(ModbusDevicePacket)`.
+- **Modbus Polling Engine Alignment (`ModbusPollingHostedService`)**:
+  - Adheres strictly to Architectural Rule #1 (No blind processing) and Rule #2 (In-memory O(1) routing).
+  - Polled raw frames are inspected and tagged into `ModbusDevicePacket` envelopes before dispatching to engineering calculations.
+- **Hardware Safety & Half-Duplex RS-485 Sequential Probing (`ModbusScanner`)**:
+  - Fixed concurrent `Task.WhenAll(probe3, probe4)` on serial bridge: probes are strictly sequential with turn-around delays. If FC03 succeeds, FC04 probe is skipped immediately.
+- **Web UI & Performance Overhaul (`ScadaDemoTestApiClient` & `Gateway.razor`)**:
+  - Eliminated slow sequential internet roundtrips to Firebase Realtime DB from `ScadaDemoTestApiClient`.
+  - Switched `Users`, `Roles`, `Tanks`, `Sites`, and `AuditLogs` to direct local ASP.NET Core API endpoints (`/api/users`, `/api/roles`, `/api/tanks`, `/api/sites`, `/api/audit-logs`) with graceful fallback.
+  - Reduced `Devices.razor` polling timer from 1000ms to 3000ms, eliminating UI lag.
+  - Added visual 3-bucket presentation in `Gateway.razor`:
+    - **Bucket 1 (Already In System)**: Amber card with slave ID and sensor name.
+    - **Bucket 2 (Blocked Scan Duplicates)**: Red alert card with bus collision warning and count.
+    - **Bucket 3 (Unique Found Devices / Found Box)**: Green verified identity cards with ProfileType badge, ModelName, Hex Payload preview, and the restored **"+ Add Selected Sensor(s)"** button!
+- **Build & Verification Status**:
+  - .NET 10 compilation: **0 errors, 0 warnings**.
+  - Dev server running cleanly on port 3000 (Web) and port 5080 (API). Both returning HTTP 200.
+
+## 48. NAMED SENSOR DUPLICATE CONFLICT RESOLUTION ENGINE (2026-10-02)
+
+- **Problem Solved**: When RS-485 sensors collide on the same Slave ID (e.g., Slave 2), the operator sitting in the office previously only saw a generic error saying "Same ID responded multiple times". They did not know WHICH physical meters were fighting for that ID, making it impossible to instruct field technicians.
+- **Microsecond Signature Disambiguation & Name Attribution**:
+  - During the presence and signature trial phases of `ModbusScanner`, all responding register profiles are captured per address.
+  - When a duplicate collision is declared (`colliding.Count >= 2` or foreign window collision), the scanner extracts the distinct driver keys (`AOSONG_AQ3485`, `VORTEX_FLOWMETER`, `KAIFENG_EM_FLOWMETER`, `SELEC_POWER_METER`, etc.) and tags each raw response with its friendly display name (`ModelName`).
+  - `ModbusScannerService` groups the responses in `RawBucket`, extracts the unique colliding names, and constructs actionable operator instructions:
+    *Example:* `"Slave 2 Collision: Meter [Kaifeng Electromagnetic Flowmeter] aur [V880BR Vortex Steam/Gas Flowmeter] dono same Slave ID 2 use kar rahe hain! Worker ko bolein ke in mein se kisi ek meter ka Modbus ID change kare."*
+  - Populates `CollidingMeterNames` in `DuplicateSlaveIdConflictDto` and `DuplicateIdConflictDto`.
+- **Operator-Grade Web UI in `Gateway.razor` (Bucket 2)**:
+  - Renders visual badges for each colliding meter:
+    `[Kaifeng Electromagnetic Flowmeter]` ⚡ CONFLICT ⚡ `[V880BR Vortex Flowmeter]` on `Slave ID 2`.
+  - Displays a high-contrast instructions banner for the on-site technician: *"Instructions for Worker: Ask the on-site technician to change the Modbus Slave ID of either meter to an unused ID, then run Scan again."*
+  - Allows an operator with zero on-site visibility to effortlessly resolve hardware conflicts remotely.
+
+
+

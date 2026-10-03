@@ -330,8 +330,8 @@ public class SensorsController : ControllerBase
         if (device is null)
             return BadRequest(new { message = "Selected device does not exist." });
 
-        if (req.SlaveAddress is < 1 or > 247)
-            return BadRequest(new { message = "Modbus slave address must be between 1 and 247." });
+        if (req.SlaveAddress is < 1 or > 255)
+            return BadRequest(new { message = "Modbus slave address must be between 1 and 255." });
         if (req.PollIntervalSeconds is < 1 or > 3600)
             return BadRequest(new { message = "Poll interval must be between 1 and 3600 seconds." });
 
@@ -339,10 +339,9 @@ public class SensorsController : ControllerBase
         if (attached.Count >= device.MaxSensorCapacity)
             return BadRequest(new { message = $"Maximum capacity reached for this device! ({attached.Count} / {device.MaxSensorCapacity} sensors)" });
 
-        // Every slave on an RS-485 bus needs a unique address; two sensors sharing
-        // one would return identical (or corrupted) poll data.
-        if (attached.Any(s => s.SlaveAddress == req.SlaveAddress))
-            return BadRequest(new { message = $"Modbus slave address {req.SlaveAddress} is already used by another sensor on this device. Each slave needs a unique address on the RS-485 bus." });
+        // Check duplicate driver on the same slave address
+        if (attached.Any(s => s.SlaveAddress == req.SlaveAddress && s.SensorTypeKey == req.SensorTypeKey))
+            return BadRequest(new { message = $"A sensor with driver '{driver.DisplayName}' is already configured on slave address {req.SlaveAddress}." });
 
         var sensor = new Sensor
         {
@@ -372,12 +371,13 @@ public class SensorsController : ControllerBase
             : null;
         sensor.Config = req.SensorConfig;
 
-        await _sensors.AddAsync(sensor);
         var columns = SensorColumnSet.For(driver, sensor.MetricFields);
         if (!columns.HasAny)
         {
             return BadRequest(new { message = "Select at least one measurable parameter for this sensor (metadata-only parameters don't create telemetry columns)." });
         }
+
+        await _sensors.AddAsync(sensor);
         await _telemetry.EnsureTelemetryTableAsync(sensor.TelemetryTableName, driver, columns);
 
         await AuditAsync("Sensor.Create", sensor, $"Added sensor '{sensor.Name}' ({sensor.UniqueSensorId}) -> table {sensor.TelemetryTableName} on device '{device.Name}'");

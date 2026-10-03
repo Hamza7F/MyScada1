@@ -137,7 +137,7 @@ public class LiveTelemetryState : IAsyncDisposable
 
         _hubConnection = new HubConnectionBuilder()
             .WithUrl($"{apiBaseUrl}/hubs/telemetry")
-            .WithAutomaticReconnect()
+            .WithAutomaticReconnect(new[] { TimeSpan.Zero, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10) })
             .Build();
 
         _hubConnection.On<LiveReading>("ReceiveReading", reading =>
@@ -176,6 +176,27 @@ public class LiveTelemetryState : IAsyncDisposable
 
         _hubConnection.Reconnecting += _ => { ConnectionStatus = "Reconnecting..."; IsConnected = false; OnChange?.Invoke(); return Task.CompletedTask; };
         _hubConnection.Reconnected += _ => { ConnectionStatus = "Connected (live)"; IsConnected = true; OnChange?.Invoke(); return Task.CompletedTask; };
+        _hubConnection.Closed += async error =>
+        {
+            ConnectionStatus = "Disconnected";
+            IsConnected = false;
+            OnChange?.Invoke();
+            await Task.Delay(3000);
+            try
+            {
+                if (_hubConnection.State == HubConnectionState.Disconnected)
+                {
+                    await _hubConnection.StartAsync();
+                    ConnectionStatus = "Connected (live)";
+                    IsConnected = true;
+                    OnChange?.Invoke();
+                }
+            }
+            catch
+            {
+                // Ignored - will retry on next cycle
+            }
+        };
 
         try
         {
@@ -185,8 +206,29 @@ public class LiveTelemetryState : IAsyncDisposable
         }
         catch
         {
-            ConnectionStatus = "Could not reach API - is scada_demo_test.API running?";
+            ConnectionStatus = "Connecting to API telemetry stream...";
             IsConnected = false;
+
+            // Spawn background retry loop
+            _ = Task.Run(async () =>
+            {
+                while (_hubConnection.State == HubConnectionState.Disconnected)
+                {
+                    await Task.Delay(3000);
+                    try
+                    {
+                        await _hubConnection.StartAsync();
+                        ConnectionStatus = "Connected (live)";
+                        IsConnected = true;
+                        OnChange?.Invoke();
+                        break;
+                    }
+                    catch
+                    {
+                        // Will retry in next iteration
+                    }
+                }
+            });
         }
 
         OnChange?.Invoke();

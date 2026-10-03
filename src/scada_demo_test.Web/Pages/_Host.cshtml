@@ -13,10 +13,21 @@
     <base href="~/" />
     <link rel="preload" href="css/site.css" as="style" />
     <link rel="stylesheet" href="css/site.css" />
+    <script src="js/theme.js"></script>
 </head>
 <body>
     <component type="typeof(App)" render-mode="ServerPrerendered" />
-    <script src="_framework/blazor.server.js" defer></script>
+    <script src="_framework/blazor.server.js" autostart="false"></script>
+    <script>
+        Blazor.start({
+            reconnectionOptions: {
+                maxRetries: 30,
+                retryIntervalMilliseconds: 1500
+            }
+        }).catch(function (err) {
+            console.warn('Blazor reconnection note:', err);
+        });
+    </script>
     <script src="js/charts.js" defer></script>
 </body>
 </html>

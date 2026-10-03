@@ -19,6 +19,10 @@ public static class DynamicSchemaInitializer
     public static async Task EnsureSchemaAsync(IServiceProvider services, CancellationToken ct = default)
     {
         var db = services.GetRequiredService<MyDbContextDxy>();
+        if (db.Database.IsSqlite())
+        {
+            return;
+        }
         var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(DynamicSchemaInitializer));
 
         await db.Database.OpenConnectionAsync(ct);

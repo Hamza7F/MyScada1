@@ -27,13 +27,15 @@ public static class EfResilience
 {
     public static readonly AsyncRetryPolicy Policy = Polly.Policy
         .Handle<SqlException>()
+        .Or<Microsoft.Data.Sqlite.SqliteException>()
         .Or<DbUpdateException>(IsTransient)
         .Or<TimeoutException>()
         .WaitAndRetryAsync(
             retryCount: 3,
             sleepDurationProvider: _ => TimeSpan.FromMilliseconds(100));
 
-    private static bool IsTransient(DbUpdateException ex) => ex.InnerException is SqlException;
+    private static bool IsTransient(DbUpdateException ex) =>
+        ex.InnerException is SqlException || ex.InnerException is Microsoft.Data.Sqlite.SqliteException;
 
     // Wrap any DB call: EfResilience.RunAsync(() => _db.SaveChangesAsync(ct))
     public static Task RunAsync(Func<Task> action) => Policy.ExecuteAsync(action);

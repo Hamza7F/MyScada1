@@ -6,17 +6,23 @@ using scada_demo_test.Domain.Services;
 
 namespace scada_demo_test.Web.Services;
 
-public class ScadaDemoTestApiClient
+public class ScadaDemoTestApiClient : IDisposable
 {
     private readonly HttpClient _http;
     private readonly HttpClient _scan;
     private readonly FirebaseScadaService _firebase;
 
-    public ScadaDemoTestApiClient(HttpClient http, IHttpClientFactory factory, FirebaseScadaService firebase)
+    public ScadaDemoTestApiClient(HttpClient http, HttpClient scan, FirebaseScadaService firebase)
     {
         _http = http;
-        _scan = factory.CreateClient("scada-bus-scan");
+        _scan = scan;
         _firebase = firebase;
+    }
+
+    public void Dispose()
+    {
+        _http.Dispose();
+        _scan.Dispose();
     }
 
     public string BaseUrl => _firebase.DatabaseUrl;
@@ -200,6 +206,13 @@ public class ScadaDemoTestApiClient
     {
         try
         {
+            var apiTanks = await _http.GetFromJsonAsync<List<StorageTankDto>>("/api/tanks");
+            if (apiTanks is { Count: > 0 }) return apiTanks;
+        }
+        catch { }
+
+        try
+        {
             var tanks = await _firebase.GetStorageTanksAsync();
             return tanks.Select(t => new StorageTankDto(
                 t.Id,
@@ -222,57 +235,87 @@ public class ScadaDemoTestApiClient
 
     public async Task<(bool Success, string? Error)> CreateTankAsync(CreateTankRequest dto)
     {
-        var tank = new StorageTank
+        try
         {
-            Id = Guid.NewGuid(),
-            SiteId = dto.SiteId,
-            TankCode = dto.TankCode,
-            Name = dto.Name,
-            CapacityLiters = dto.CapacityLiters,
-            CurrentVolumeLiters = dto.CapacityLiters * 0.7,
-            LevelPercentage = 70.0,
-            LiquidType = dto.LiquidType,
-            TemperatureCelsius = 24.0,
-            Status = "Normal",
-            InletFlowRate = 120.0,
-            OutletFlowRate = 100.0,
-            LastUpdatedAt = DateTime.UtcNow
-        };
-        var res = await _firebase.UpdateStorageTankAsync(tank);
-        if (res.Success)
-        {
-            _ = _firebase.LogAuditActionAsync("Tank.Create", "StorageTank", tank.Id.ToString(), $"Created tank {tank.Name} ({tank.TankCode})");
+            var res = await _http.PostAsJsonAsync("/api/tanks", dto);
+            if (res.IsSuccessStatusCode) return (true, null);
+            var err = await res.Content.ReadFromJsonAsync<ErrorPayload>();
+            return (false, err?.message ?? $"Create tank failed ({res.StatusCode})");
         }
-        return res;
+        catch
+        {
+            var tank = new StorageTank
+            {
+                Id = Guid.NewGuid(),
+                SiteId = dto.SiteId,
+                TankCode = dto.TankCode,
+                Name = dto.Name,
+                CapacityLiters = dto.CapacityLiters,
+                CurrentVolumeLiters = dto.CapacityLiters * 0.7,
+                LevelPercentage = 70.0,
+                LiquidType = dto.LiquidType,
+                TemperatureCelsius = 24.0,
+                Status = "Normal",
+                InletFlowRate = 120.0,
+                OutletFlowRate = 100.0,
+                LastUpdatedAt = DateTime.UtcNow
+            };
+            var res = await _firebase.UpdateStorageTankAsync(tank);
+            if (res.Success)
+            {
+                _ = _firebase.LogAuditActionAsync("Tank.Create", "StorageTank", tank.Id.ToString(), $"Created tank {tank.Name} ({tank.TankCode})");
+            }
+            return res;
+        }
     }
 
     public async Task<(bool Success, string? Error)> UpdateTankAsync(Guid id, UpdateTankRequest dto)
     {
-        var tanks = await _firebase.GetStorageTanksAsync();
-        var existing = tanks.FirstOrDefault(t => t.Id == id);
-        if (existing == null) return (false, "Tank not found.");
-
-        existing.Name = dto.Name;
-        existing.CapacityLiters = dto.CapacityLiters;
-        existing.LiquidType = dto.LiquidType;
-        existing.LastUpdatedAt = DateTime.UtcNow;
-
-        var res = await _firebase.UpdateStorageTankAsync(existing);
-        if (res.Success)
+        try
         {
-            _ = _firebase.LogAuditActionAsync("Tank.Update", "StorageTank", id.ToString(), $"Updated tank {existing.Name}");
+            var res = await _http.PutAsJsonAsync($"/api/tanks/{id}", dto);
+            if (res.IsSuccessStatusCode) return (true, null);
+            var err = await res.Content.ReadFromJsonAsync<ErrorPayload>();
+            return (false, err?.message ?? $"Update tank failed ({res.StatusCode})");
         }
-        return res;
+        catch
+        {
+            var tanks = await _firebase.GetStorageTanksAsync();
+            var existing = tanks.FirstOrDefault(t => t.Id == id);
+            if (existing == null) return (false, "Tank not found.");
+
+            existing.Name = dto.Name;
+            existing.CapacityLiters = dto.CapacityLiters;
+            existing.LiquidType = dto.LiquidType;
+            existing.LastUpdatedAt = DateTime.UtcNow;
+
+            var res = await _firebase.UpdateStorageTankAsync(existing);
+            if (res.Success)
+            {
+                _ = _firebase.LogAuditActionAsync("Tank.Update", "StorageTank", id.ToString(), $"Updated tank {existing.Name}");
+            }
+            return res;
+        }
     }
 
     public async Task<(bool Success, string? Error)> DeleteTankAsync(Guid id)
     {
-        var res = await _firebase.DeleteStorageTankAsync(id);
-        if (res.Success)
+        try
         {
-            _ = _firebase.LogAuditActionAsync("Tank.Delete", "StorageTank", id.ToString(), $"Deleted tank {id}");
+            var res = await _http.DeleteAsync($"/api/tanks/{id}");
+            if (res.IsSuccessStatusCode) return (true, null);
+            var err = await res.Content.ReadFromJsonAsync<ErrorPayload>();
+            return (false, err?.message ?? $"Delete tank failed ({res.StatusCode})");
         }
-        return res;
+        catch
+        {
+            var res = await _firebase.DeleteStorageTankAsync(id);
+            if (res.Success)
+            {
+                _ = _firebase.LogAuditActionAsync("Tank.Delete", "StorageTank", id.ToString(), $"Deleted tank {id}");
+            }
+            return res;
+        }
     }
 
     // ---- Alerts (API / PostgreSQL-backed, NOT Firebase) ----
@@ -374,6 +417,15 @@ public class ScadaDemoTestApiClient
     {
         try
         {
+            var q = $"/api/audit-logs?page={page}&pageSize={pageSize}";
+            if (!string.IsNullOrWhiteSpace(search)) q += $"&search={Uri.EscapeDataString(search)}";
+            var apiResult = await _http.GetFromJsonAsync<AuditLogsPagedDto>(q);
+            if (apiResult is { Items.Count: > 0 } || apiResult?.Total > 0) return apiResult;
+        }
+        catch { }
+
+        try
+        {
             var all = await _firebase.GetAuditLogsAsync(200);
             if (!string.IsNullOrEmpty(search))
             {
@@ -411,6 +463,13 @@ public class ScadaDemoTestApiClient
     {
         try
         {
+            var apiSites = await _http.GetFromJsonAsync<List<SiteDto>>("/api/sites");
+            if (apiSites is { Count: > 0 }) return apiSites;
+        }
+        catch { }
+
+        try
+        {
             var sites = await _firebase.GetSitesAsync();
             return sites.Select(s => new SiteDto(
                 s.Id,
@@ -426,21 +485,31 @@ public class ScadaDemoTestApiClient
 
     public async Task<(bool Success, string? Error)> CreateSiteAsync(SiteDto dto)
     {
-        var site = new Site
+        try
         {
-            Id = dto.Id != Guid.Empty ? dto.Id : Guid.NewGuid(),
-            Code = dto.Code,
-            Name = dto.Name,
-            Location = dto.Location,
-            Description = dto.Description,
-            CreatedAt = DateTime.UtcNow
-        };
-        var res = await _firebase.CreateSiteAsync(site);
-        if (res.Success)
-        {
-            _ = _firebase.LogAuditActionAsync("Site.Create", "Site", site.Id.ToString(), $"Created site {site.Name} ({site.Code})");
+            var res = await _http.PostAsJsonAsync("/api/sites", dto);
+            if (res.IsSuccessStatusCode) return (true, null);
+            var err = await res.Content.ReadFromJsonAsync<ErrorPayload>();
+            return (false, err?.message ?? $"Create site failed ({res.StatusCode})");
         }
-        return res;
+        catch
+        {
+            var site = new Site
+            {
+                Id = dto.Id != Guid.Empty ? dto.Id : Guid.NewGuid(),
+                Code = dto.Code,
+                Name = dto.Name,
+                Location = dto.Location,
+                Description = dto.Description,
+                CreatedAt = DateTime.UtcNow
+            };
+            var res = await _firebase.CreateSiteAsync(site);
+            if (res.Success)
+            {
+                _ = _firebase.LogAuditActionAsync("Site.Create", "Site", site.Id.ToString(), $"Created site {site.Name} ({site.Code})");
+            }
+            return res;
+        }
     }
 
     // ---- Firmware OTA ----
@@ -541,7 +610,8 @@ public class ScadaDemoTestApiClient
 
     public record GatewayDeviceDto(Guid Id, string ExternalId, string Name, string HardwareType,
         string? IpAddress, int Port, int BaudRate, string Parity, int StopBits, int TimeoutMs,
-        int MaxSensorCapacity, int SensorCount, bool IsOnline, DateTime? LastSeenAt, DateTime? CreatedAt);
+        int MaxSensorCapacity, int SensorCount, bool IsOnline, DateTime? LastSeenAt, DateTime? CreatedAt,
+        Guid? SiteId = null);
 
     public record CreateGatewayDeviceRequest(string Name, string HardwareType, string? IpAddress,
         int? Port, int? BaudRate, string? Parity, int? StopBits, int? TimeoutMs, Guid? SiteId);
@@ -585,7 +655,9 @@ public class ScadaDemoTestApiClient
         double? LiveSecondary,
         string Status,
         bool IsAmbiguous = false,
-        List<ScannedCandidateDto>? Candidates = null);
+        List<ScannedCandidateDto>? Candidates = null,
+        string? ProfileType = null,
+        string? RawHexPayload = null);
 
     public record ScannedCandidateDto(
         string DriverKey,
@@ -597,11 +669,17 @@ public class ScadaDemoTestApiClient
         bool ProofServed,
         bool BestGuess);
 
+    public record AlreadyInSystemSlaveDto(
+        int SlaveAddress,
+        string? ExistingSensorName,
+        string Message);
+
     public record DuplicateIdConflictDto(
         int SlaveAddress,
         int MeterCount,
         string? DriverName,
-        string Message);
+        string Message,
+        List<string>? CollidingMeterNames = null);
 
     public record GatewayScanResultDto(
         Guid DeviceId,
@@ -618,7 +696,8 @@ public class ScadaDemoTestApiClient
         List<ScannedMeterDto> Found,
         List<int> SkippedSlaves,
         List<int>? AmbiguousSlaves = null,
-        List<DuplicateIdConflictDto>? DuplicateIdConflicts = null);
+        List<DuplicateIdConflictDto>? DuplicateIdConflicts = null,
+        List<AlreadyInSystemSlaveDto>? AlreadyInSystemSlaves = null);
 
     public async Task<List<GatewayDeviceDto>> GetGatewayDevicesAsync()
     {
@@ -768,7 +847,7 @@ public class ScadaDemoTestApiClient
         Guid deviceId,
         int probeTimeoutMs = 200,
         int startAddress = 1,
-        int endAddress = 247,
+        int endAddress = 255,
         int passes = 0,
         bool deepDuplicateCheck = true)
     {
@@ -794,13 +873,24 @@ public class ScadaDemoTestApiClient
         catch { return null; }
     }
 
+    public record ReachabilityResultDto(bool reachable, bool online, int? latencyMs, string message);
+
+    public async Task<ReachabilityResultDto?> CheckReachabilityAsync(Guid deviceId)
+    {
+        try
+        {
+            return await _http.GetFromJsonAsync<ReachabilityResultDto>($"/api/devices/{deviceId}/reachability");
+        }
+        catch { return null; }
+    }
+
     private sealed class ScanBusErrorDto
     {
         public string? message { get; set; }
         public GatewayScanResultDto? scan { get; set; }
     }
 
-    // ---- Users ----
+    // ---- Users (Fast Local API with fallback) ----
     public record UserDto(Guid Id, string FirstName, string LastName, string Email, string? PhoneNumber,
         string RoleName, bool IsHardcodedSuperAdmin, DateTime CreatedAt);
     public record CreateUserRequest(string FirstName, string LastName, string Email, string? PhoneNumber, string Password, string RoleName);
@@ -808,6 +898,13 @@ public class ScadaDemoTestApiClient
 
     public async Task<List<UserDto>> GetUsersAsync()
     {
+        try
+        {
+            var apiUsers = await _http.GetFromJsonAsync<List<UserDto>>("/api/users");
+            if (apiUsers is { Count: > 0 }) return apiUsers;
+        }
+        catch { }
+
         try
         {
             var users = await _firebase.GetUsersAsync();
@@ -838,20 +935,50 @@ public class ScadaDemoTestApiClient
 
     public async Task<(bool Success, string? Error)> CreateUserAsync(CreateUserRequest dto)
     {
-        return await _firebase.CreateUserAsync(dto.FirstName, dto.LastName, dto.Email, dto.PhoneNumber, dto.Password, dto.RoleName);
+        try
+        {
+            var res = await _http.PostAsJsonAsync("/api/users", dto);
+            if (res.IsSuccessStatusCode) return (true, null);
+            var err = await res.Content.ReadFromJsonAsync<ErrorPayload>();
+            return (false, err?.message ?? $"Failed ({res.StatusCode})");
+        }
+        catch
+        {
+            return await _firebase.CreateUserAsync(dto.FirstName, dto.LastName, dto.Email, dto.PhoneNumber, dto.Password, dto.RoleName);
+        }
     }
 
     public async Task<(bool Success, string? Error)> UpdateUserAsync(Guid id, UpdateUserRequest dto)
     {
-        return await _firebase.UpdateUserAsync(id.ToString(), dto.FirstName, dto.LastName, dto.PhoneNumber, dto.RoleName, dto.NewPassword);
+        try
+        {
+            var res = await _http.PutAsJsonAsync($"/api/users/{id}", dto);
+            if (res.IsSuccessStatusCode) return (true, null);
+            var err = await res.Content.ReadFromJsonAsync<ErrorPayload>();
+            return (false, err?.message ?? $"Failed ({res.StatusCode})");
+        }
+        catch
+        {
+            return await _firebase.UpdateUserAsync(id.ToString(), dto.FirstName, dto.LastName, dto.PhoneNumber, dto.RoleName, dto.NewPassword);
+        }
     }
 
     public async Task<(bool Success, string? Error)> DeleteUserAsync(Guid id)
     {
-        return await _firebase.DeleteUserAsync(id.ToString());
+        try
+        {
+            var res = await _http.DeleteAsync($"/api/users/{id}");
+            if (res.IsSuccessStatusCode) return (true, null);
+            var err = await res.Content.ReadFromJsonAsync<ErrorPayload>();
+            return (false, err?.message ?? $"Failed ({res.StatusCode})");
+        }
+        catch
+        {
+            return await _firebase.DeleteUserAsync(id.ToString());
+        }
     }
 
-    // ---- Roles / Permissions ----
+    // ---- Roles / Permissions (Fast Local API with fallback) ----
     public record RoleDto(Guid Id, string Name, string? Description, bool IsSuperAdminRole, int UserCount, Dictionary<string, bool> Permissions);
     public record CreateRoleRequest(string Name, string? Description);
     public record UpdateRolePermissionsRequest(Dictionary<string, bool> Permissions);
@@ -859,6 +986,13 @@ public class ScadaDemoTestApiClient
 
     public async Task<List<RoleDto>> GetRolesAsync()
     {
+        try
+        {
+            var apiRoles = await _http.GetFromJsonAsync<List<RoleDto>>("/api/roles");
+            if (apiRoles is { Count: > 0 }) return apiRoles;
+        }
+        catch { }
+
         try
         {
             var roles = await _firebase.GetRolesAsync();
@@ -890,24 +1024,61 @@ public class ScadaDemoTestApiClient
 
     public async Task<PermissionsCatalogDto> GetPermissionsCatalogAsync()
     {
-        return await Task.FromResult(new PermissionsCatalogDto(
+        try
+        {
+            var catalog = await _http.GetFromJsonAsync<PermissionsCatalogDto>("/api/roles/permissions-catalog");
+            if (catalog is not null) return catalog;
+        }
+        catch { }
+
+        return new PermissionsCatalogDto(
             AppTabs.All.ToList(),
             AppPermissions.All.ToList()
-        ));
+        );
     }
 
     public async Task<(bool Success, string? Error)> CreateRoleAsync(CreateRoleRequest dto)
     {
-        return await _firebase.CreateRoleAsync(dto.Name, dto.Description);
+        try
+        {
+            var res = await _http.PostAsJsonAsync("/api/roles", dto);
+            if (res.IsSuccessStatusCode) return (true, null);
+            var err = await res.Content.ReadFromJsonAsync<ErrorPayload>();
+            return (false, err?.message ?? $"Failed ({res.StatusCode})");
+        }
+        catch
+        {
+            return await _firebase.CreateRoleAsync(dto.Name, dto.Description);
+        }
     }
 
     public async Task<(bool Success, string? Error)> UpdateRolePermissionsAsync(Guid roleId, Dictionary<string, bool> permissions)
     {
-        return await _firebase.UpdateRolePermissionsAsync(roleId.ToString(), permissions);
+        try
+        {
+            var res = await _http.PutAsJsonAsync($"/api/roles/{roleId}/permissions", new UpdateRolePermissionsRequest(permissions));
+            if (res.IsSuccessStatusCode) return (true, null);
+            var err = await res.Content.ReadFromJsonAsync<ErrorPayload>();
+            return (false, err?.message ?? $"Failed ({res.StatusCode})");
+        }
+        catch
+        {
+            return await _firebase.UpdateRolePermissionsAsync(roleId.ToString(), permissions);
+        }
     }
 
     public async Task<(bool Success, string? Error)> DeleteRoleAsync(Guid id)
     {
-        return await _firebase.DeleteRoleAsync(id.ToString());
+        try
+        {
+            var res = await _http.DeleteAsync($"/api/roles/{id}");
+            if (res.IsSuccessStatusCode) return (true, null);
+            var err = await res.Content.ReadFromJsonAsync<ErrorPayload>();
+            return (false, err?.message ?? $"Failed ({res.StatusCode})");
+        }
+        catch
+        {
+            return await _firebase.DeleteRoleAsync(id.ToString());
+        }
     }
 }
