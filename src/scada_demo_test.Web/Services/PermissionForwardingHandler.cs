@@ -73,6 +73,36 @@ public class PermissionForwardingHandler : DelegatingHandler
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         }
 
-        return await base.SendAsync(request, cancellationToken);
+        try
+        {
+            return await base.SendAsync(request, cancellationToken);
+        }
+        catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
+        {
+            // Circuit or caller explicitly cancelled request (e.g. browser refreshed or navigated)
+            return new HttpResponseMessage((System.Net.HttpStatusCode)499)
+            {
+                RequestMessage = request,
+                Content = new StringContent($"{{\"error\":\"Request was canceled by the client: {ex.Message}\"}}", System.Text.Encoding.UTF8, "application/json")
+            };
+        }
+        catch (OperationCanceledException ex)
+        {
+            // Request timed out (API on port 5080 did not answer within timeout)
+            return new HttpResponseMessage(System.Net.HttpStatusCode.GatewayTimeout)
+            {
+                RequestMessage = request,
+                Content = new StringContent($"{{\"error\":\"API request timed out (verify scada_demo_test.API is running on port 5080): {ex.Message}\"}}", System.Text.Encoding.UTF8, "application/json")
+            };
+        }
+        catch (HttpRequestException ex)
+        {
+            // API connection refused (port 5080 offline)
+            return new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable)
+            {
+                RequestMessage = request,
+                Content = new StringContent($"{{\"error\":\"API unreachable ({ex.Message}). Start scada_demo_test.API on port 5080.\",\"status\":503}}", System.Text.Encoding.UTF8, "application/json")
+            };
+        }
     }
 }

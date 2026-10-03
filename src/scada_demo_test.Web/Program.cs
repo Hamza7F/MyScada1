@@ -72,7 +72,7 @@ static HttpClient BuildApiClient(IServiceProvider sp, Uri baseAddress, TimeSpan 
 // IServiceProvider so AuthenticationStateProvider is always valid.
 builder.Services.AddScoped<ScadaDemoTestApiClient>(sp =>
     new ScadaDemoTestApiClient(
-        BuildApiClient(sp, baseUri, TimeSpan.FromSeconds(10)),
+        BuildApiClient(sp, baseUri, TimeSpan.FromSeconds(30)),
         BuildApiClient(sp, baseUri, TimeSpan.FromMinutes(5)),
         sp.GetRequiredService<FirebaseScadaService>()));
 
