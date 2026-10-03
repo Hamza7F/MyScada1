@@ -1,18 +1,12 @@
 // Theme management for ALAM IOT SCADA
-// Handles instant theme initialization without flicker, localStorage persistence,
-// and smooth dynamic switching between Light and Dark themes.
+// Default theme is Light on initial visit / login.
+// Users can toggle to Dark mode anytime, and their explicit choice is saved in localStorage.
 
 window.theme = {
     initTheme: function () {
         var saved = localStorage.getItem('scada_theme');
-        var isDark = false;
-        if (saved === 'dark') {
-            isDark = true;
-        } else if (saved === 'light') {
-            isDark = false;
-        } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-            isDark = true;
-        }
+        // Default to light. Only enable dark if the user explicitly saved 'dark'
+        var isDark = (saved === 'dark');
 
         document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
         if (document.body) {
@@ -35,14 +29,7 @@ window.theme = {
 (function () {
     try {
         var saved = localStorage.getItem('scada_theme');
-        var isDark = false;
-        if (saved === 'dark') {
-            isDark = true;
-        } else if (saved === 'light') {
-            isDark = false;
-        } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-            isDark = true;
-        }
+        var isDark = (saved === 'dark');
         document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
     } catch (e) { }
 })();
