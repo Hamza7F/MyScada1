@@ -413,7 +413,7 @@ public sealed class ModbusScanner : ISmartScanService
             bool proofHasData = false;
             if (driver.CorroborationWindow is { } proofWin)
             {
-                for (int attempt = 0; attempt < DegeneracyProofAttempts && !proofHasData; attempt++)
+                for (int attempt = 0; attempt < DegeneracyProofAttempts && !proofServed; attempt++)
                 {
                     if (attempt > 0) await Task.Delay(InterWindowDelayMs, ct);
                     var (kp, plp) = await ReadBlockAsync(master, req, connectMs, slave, proofWin, probeTimeout, ct);
@@ -425,19 +425,21 @@ public sealed class ModbusScanner : ISmartScanService
                 }
             }
 
+            bool multiWindowServed = windows.Count > 1 && combinedBytes.Count > payload.Length;
             bool allZero = (primary ?? 0) == 0 && (secondary ?? 0) == 0;
-            if (allZero && !proofHasData)
+            if (allZero && !proofServed && !multiWindowServed)
             {
                 _logger?.LogInformation(
-                    "scan slave {Slave}: {Driver} REJECTED by degeneracy guard (all zero, proofServed={Served}, proofHasData=false)",
-                    slave, driver.DriverKey, proofServed);
+                    "scan slave {Slave}: {Driver} REJECTED by degeneracy guard (all zero, proofServed={Served}, multiWindow={Multi})",
+                    slave, driver.DriverKey, proofServed, multiWindowServed);
                 continue;
             }
 
             result.AcceptedFamilies.Add(driver.DriverKey);
-            if (proofHasData) result.ProvenFamilies.Add(driver.DriverKey);
+            bool isProven = proofServed || multiWindowServed;
+            if (isProven) result.ProvenFamilies.Add(driver.DriverKey);
 
-            int unproven = proofHasData ? 0 : 1;
+            int unproven = isProven ? 0 : 1;
             var rank = new CandidateRank(
                 ident.RegisterQuantity,
                 unproven,
@@ -615,8 +617,15 @@ public sealed class ModbusScanner : ISmartScanService
 
         if (driver is AosongAQ3485Driver)
         {
-            return w.PrimaryValue is >= -60 and <= 150
-                   && w.SecondaryValue is >= -1 and <= 101;
+            // Reject Selec Energy Meter CT ratio and non-ambient register artifacts:
+            // CT rating 1000/0 decodes as 100.0% RH and 0.0°C.
+            if (w.PrimaryValue == 0.0 && (w.SecondaryValue == 100.0 || w.SecondaryValue == 0.0))
+                return false;
+
+            // Environmental atmospheric operating range for AQ3485 sensor:
+            // Temperature: -40°C to 80°C, Relative Humidity: 1% to 99% RH
+            return w.PrimaryValue is >= -40.0 and <= 80.0
+                   && w.SecondaryValue is >= 1.0 and <= 99.0;
         }
 
         if (w.PrimaryValue is { } pv && (!double.IsFinite(pv) || Math.Abs(pv) > 1e7)) return false;
@@ -658,10 +667,14 @@ public sealed class ModbusScanner : ISmartScanService
     {
         public int CompareTo(CandidateRank other)
         {
-            var c = Width.CompareTo(other.Width); if (c != 0) return c;
-            c = Unproven.CompareTo(other.Unproven); if (c != 0) return c;
-            c = Live.CompareTo(other.Live); if (c != 0) return c;
-            c = Extra.CompareTo(other.Extra); if (c != 0) return c;
+            // 1. Proven (0) comes before Unproven (1)
+            var c = Unproven.CompareTo(other.Unproven); if (c != 0) return c;
+            // 2. Wider register verification is more specific (descending: 12 beats 2)
+            c = other.Width.CompareTo(Width); if (c != 0) return c;
+            // 3. More live values confirmed (descending)
+            c = other.Live.CompareTo(Live); if (c != 0) return c;
+            // 4. More extra windows verified (descending)
+            c = other.Extra.CompareTo(Extra); if (c != 0) return c;
             return Order.CompareTo(other.Order);
         }
     }
