@@ -216,38 +216,20 @@ public sealed class ModbusScanner : ISmartScanService
 
         foreach (var (slave, st) in states.OrderBy(kv => kv.Key))
         {
-            if (!st.Responded) continue;
-            responding++;
-
-            if (st.Candidates.Count == 0)
-            {
-                unknown++;
-                _logger?.LogInformation("scan slave {Slave}: responded but NO candidate accepted (unknown responder)", slave);
-                unknownItems.Add(new ScannedMeterDto(
-                    slave, null, null, "Unknown responder", 0, 0, null, null, 0,
-                    $"Unidentified device (Slave {slave})", null, null, "unknown"));
-                continue;
-            }
+            if (!st.Responded || st.Candidates.Count == 0) continue;
 
             var validCandidates = st.Candidates
                 .Where(c => DriverOf(c.Dto.DriverKey) is not null)
                 .OrderBy(c => c.Rank)
                 .ToList();
 
-            if (validCandidates.Count == 0)
-            {
-                unknown++;
-                _logger?.LogInformation("scan slave {Slave}: responded but NO candidate accepted (unknown responder)", slave);
-                unknownItems.Add(new ScannedMeterDto(
-                    slave, null, null, "Unknown responder", 0, 0, null, null, 0,
-                    $"Unidentified device (Slave {slave})", null, null, "unknown"));
-                continue;
-            }
+            if (validCandidates.Count == 0) continue;
+            responding++;
 
             // Disambiguate known cross-register shadows on a single physical device:
-            // Selec Power Meter (FC04 @ 42, 58, 64) is a multifunction meter whose holding
-            // registers at FC03 (configuration table) can falsely register as an unproven Aosong or EM Flowmeter.
-            // If Selec is verified and proven on this address, FC03 candidates on this address are shadows of Selec.
+            // 1. Selec Power Meter (FC04 @ 42, 58, 64) is a multifunction meter whose holding/input
+            //    registers can falsely return zeros for unproven Vortex, Aosong, or Kaifeng queries.
+            //    If Selec is proven on this address, all other unproven candidates are shadow replies of Selec.
             if (validCandidates.Count > 1)
             {
                 bool hasProvenSelec = validCandidates.Any(c =>
@@ -255,9 +237,25 @@ public sealed class ModbusScanner : ISmartScanService
 
                 if (hasProvenSelec)
                 {
-                    validCandidates.RemoveAll(c => c.Dto.DriverKey == "AOSONG_AQ3485"
-                                                || c.Dto.DriverKey == "KAIFENG_EM_FLOWMETER"
-                                                || c.Dto.DriverKey == "KAIFENG_FLOWMETER");
+                    validCandidates.RemoveAll(c => c.Dto.DriverKey != "SELEC_POWER_METER");
+                }
+                else
+                {
+                    bool hasProvenVortex = validCandidates.Any(c =>
+                        c.Dto.DriverKey == "VORTEX_FLOWMETER" && (c.Dto.ProofServed || c.Rank.Unproven == 0));
+
+                    if (hasProvenVortex)
+                    {
+                        validCandidates.RemoveAll(c => c.Dto.DriverKey != "VORTEX_FLOWMETER" && c.Rank.Unproven > 0 && !c.Dto.ProofServed);
+                    }
+
+                    bool hasProvenEm = validCandidates.Any(c =>
+                        c.Dto.DriverKey == "KAIFENG_EM_FLOWMETER" && (c.Dto.ProofServed || c.Rank.Unproven == 0));
+
+                    if (hasProvenEm)
+                    {
+                        validCandidates.RemoveAll(c => c.Dto.DriverKey != "KAIFENG_EM_FLOWMETER" && c.Rank.Unproven > 0 && !c.Dto.ProofServed);
+                    }
                 }
             }
 
@@ -453,14 +451,13 @@ public sealed class ModbusScanner : ISmartScanService
             if (k4 == ReadKind.Unsafe || k4 == ReadKind.ConnectFailed) { result.ConnectionUnsafe = true; return result; }
         }
 
-        bool responded = k3 is ReadKind.Data or ReadKind.WindowInvalid
-                      || k4 is ReadKind.Data or ReadKind.WindowInvalid;
+        bool responded = k3 == ReadKind.Data || k4 == ReadKind.Data;
 
         if (!responded)
         {
             await Task.Delay(InterWindowDelayMs, ct);
             var (resVortex, _) = await ReadBlockAsync(sessionHolder, slave, new SensorReadWindow(0x04, 1026, 2), probeTimeout, ct);
-            if (resVortex is ReadKind.Data or ReadKind.WindowInvalid) responded = true;
+            if (resVortex == ReadKind.Data) responded = true;
             else if (resVortex is ReadKind.Unsafe or ReadKind.ConnectFailed) { result.ConnectionUnsafe = true; return result; }
         }
 
@@ -468,11 +465,11 @@ public sealed class ModbusScanner : ISmartScanService
         {
             await Task.Delay(InterWindowDelayMs, ct);
             var (resEm, _) = await ReadBlockAsync(sessionHolder, slave, new SensorReadWindow(0x03, 90, 2), probeTimeout, ct);
-            if (resEm is ReadKind.Data or ReadKind.WindowInvalid) responded = true;
+            if (resEm == ReadKind.Data) responded = true;
             else if (resEm is ReadKind.Unsafe or ReadKind.ConnectFailed) { result.ConnectionUnsafe = true; return result; }
         }
 
-        if (!responded) return result; // silent
+        if (!responded) return result; // silent on this address
 
         // Full identification: every installed driver's own identification window.
         for (int d = 0; d < _drivers.Count; d++)
@@ -536,13 +533,16 @@ public sealed class ModbusScanner : ISmartScanService
             bool structureOk = driver.ValidatePayloadStructure(payload);
             bool boundariesOk = driver.ValidateValueBoundaries(combinedBytes.ToArray()) || driver.ValidateValueBoundaries(payload);
 
-            if (!structureOk || !boundariesOk)
+            bool isProven = proofServed || multiWindowServed;
+
+            // Unproven Ghost Rejection: If a driver has no proof window / multi-window corroboration
+            // AND all its read bytes are 0x00, it is a dummy register response, NOT a physical device!
+            if (!isProven && !AnyNonZero(payload) && (combinedBytes.Count == 0 || !AnyNonZero(combinedBytes.ToArray())))
             {
                 continue;
             }
 
             result.AcceptedFamilies.Add(driver.DriverKey);
-            bool isProven = proofServed || multiWindowServed;
             if (isProven) result.ProvenFamilies.Add(driver.DriverKey);
 
             int unproven = isProven ? 0 : 1;

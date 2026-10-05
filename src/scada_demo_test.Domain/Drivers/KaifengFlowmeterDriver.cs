@@ -60,6 +60,15 @@ public class KaifengFlowmeterDriver : ISensorDriver
     public bool ValidateValueBoundaries(byte[] rawPayload)
     {
         if (rawPayload == null || rawPayload.Length < 6) return false;
+        
+        // Discard all-zero ghost payloads
+        bool hasNonZero = false;
+        for (int i = 0; i < rawPayload.Length; i++)
+        {
+            if (rawPayload[i] != 0) { hasNonZero = true; break; }
+        }
+        if (!hasNonZero) return false;
+
         var f1 = ModbusValueCodec.ToFloat32(rawPayload, rawPayload.Length >= 10 ? 2 : 0);
         if (!double.IsFinite(f1) || Math.Abs(f1) > 1e7) return false;
         return true;
