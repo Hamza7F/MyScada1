@@ -226,36 +226,26 @@ public sealed class ModbusScanner : ISmartScanService
             if (validCandidates.Count == 0) continue;
             responding++;
 
-            // Disambiguate known cross-register shadows on a single physical device:
-            // 1. Selec Power Meter (FC04 @ 42, 58, 64) is a multifunction meter whose holding/input
-            //    registers can falsely return zeros for unproven Vortex, Aosong, or Kaifeng queries.
-            //    If Selec is proven on this address, all other unproven candidates are shadow replies of Selec.
+            // Disambiguate known cross-register dummy shadow responses on a single physical device:
+            // A multifunction meter like Selec can return dummy zeros for holding registers.
+            // Only prune unproven dummy zero shadows (Live == 0, ProofServed == false, Unproven > 0).
+            // Any candidate with real live sensor values (Live > 0) or independent proof is a
+            // genuine physical meter on the bus and MUST be preserved to trigger duplicate conflict detection!
             if (validCandidates.Count > 1)
             {
                 bool hasProvenSelec = validCandidates.Any(c =>
                     c.Dto.DriverKey == "SELEC_POWER_METER" && (c.Dto.ProofServed || c.Rank.Unproven == 0));
+                bool hasProvenVortex = validCandidates.Any(c =>
+                    c.Dto.DriverKey == "VORTEX_FLOWMETER" && (c.Dto.ProofServed || c.Rank.Unproven == 0));
+                bool hasProvenEm = validCandidates.Any(c =>
+                    c.Dto.DriverKey == "KAIFENG_EM_FLOWMETER" && (c.Dto.ProofServed || c.Rank.Unproven == 0));
 
-                if (hasProvenSelec)
+                if (hasProvenSelec || hasProvenVortex || hasProvenEm)
                 {
-                    validCandidates.RemoveAll(c => c.Dto.DriverKey != "SELEC_POWER_METER");
-                }
-                else
-                {
-                    bool hasProvenVortex = validCandidates.Any(c =>
-                        c.Dto.DriverKey == "VORTEX_FLOWMETER" && (c.Dto.ProofServed || c.Rank.Unproven == 0));
-
-                    if (hasProvenVortex)
-                    {
-                        validCandidates.RemoveAll(c => c.Dto.DriverKey != "VORTEX_FLOWMETER" && c.Rank.Unproven > 0 && !c.Dto.ProofServed);
-                    }
-
-                    bool hasProvenEm = validCandidates.Any(c =>
-                        c.Dto.DriverKey == "KAIFENG_EM_FLOWMETER" && (c.Dto.ProofServed || c.Rank.Unproven == 0));
-
-                    if (hasProvenEm)
-                    {
-                        validCandidates.RemoveAll(c => c.Dto.DriverKey != "KAIFENG_EM_FLOWMETER" && c.Rank.Unproven > 0 && !c.Dto.ProofServed);
-                    }
+                    validCandidates.RemoveAll(c =>
+                        c.Rank.Unproven > 0 &&
+                        !c.Dto.ProofServed &&
+                        c.Rank.Live == 0);
                 }
             }
 
