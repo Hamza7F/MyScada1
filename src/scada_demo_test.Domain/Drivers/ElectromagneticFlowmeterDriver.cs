@@ -72,4 +72,19 @@ public class ElectromagneticFlowmeterDriver : ISensorDriver
             ? new WindowTelemetry { SecondaryValue = Math.Round(ModbusValueCodec.ToFloat32(rawRegisters, 0), 2) } // totalizer
             : new WindowTelemetry { PrimaryValue = Math.Round(ModbusValueCodec.ToFloat32(rawRegisters, 0), 2) };   // flow rate
     }
+
+    public bool ValidatePayloadStructure(byte[] rawPayload) => rawPayload != null && (rawPayload.Length == 4 || rawPayload.Length >= 8);
+
+    public bool ValidateValueBoundaries(byte[] rawPayload)
+    {
+        if (rawPayload == null || rawPayload.Length < 4) return false;
+        var f1 = ModbusValueCodec.ToFloat32(rawPayload, 0);
+        if (!double.IsFinite(f1) || Math.Abs(f1) > 1e12) return false;
+        if (rawPayload.Length >= 8)
+        {
+            var f2 = ModbusValueCodec.ToFloat32(rawPayload, 4);
+            if (!double.IsFinite(f2) || Math.Abs(f2) > 1e12) return false;
+        }
+        return true;
+    }
 }

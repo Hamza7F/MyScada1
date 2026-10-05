@@ -75,4 +75,19 @@ public class VortexFlowmeterDriver : ISensorDriver
             _ => new WindowTelemetry()
         };
     }
+
+    public bool ValidatePayloadStructure(byte[] rawPayload) => rawPayload != null && (rawPayload.Length == 4 || rawPayload.Length >= 8);
+
+    public bool ValidateValueBoundaries(byte[] rawPayload)
+    {
+        if (rawPayload == null || rawPayload.Length < 4) return false;
+        var f1 = ModbusValueCodec.ReadFloat32HighWordFirst(rawPayload, 0);
+        if (!double.IsFinite(f1) || Math.Abs(f1) > 1e7) return false;
+        if (rawPayload.Length >= 8)
+        {
+            var f2 = ModbusValueCodec.ReadFloat32HighWordFirst(rawPayload, 4);
+            if (!double.IsFinite(f2) || Math.Abs(f2) > 1e12) return false;
+        }
+        return true;
+    }
 }

@@ -54,4 +54,14 @@ public class KaifengFlowmeterDriver : ISensorDriver
             SecondaryValue = Math.Round(totalizer, 2)
         };
     }
+
+    public bool ValidatePayloadStructure(byte[] rawPayload) => rawPayload != null && (rawPayload.Length == 6 || rawPayload.Length == 8 || rawPayload.Length >= 10);
+
+    public bool ValidateValueBoundaries(byte[] rawPayload)
+    {
+        if (rawPayload == null || rawPayload.Length < 6) return false;
+        var f1 = ModbusValueCodec.ToFloat32(rawPayload, rawPayload.Length >= 10 ? 2 : 0);
+        if (!double.IsFinite(f1) || Math.Abs(f1) > 1e7) return false;
+        return true;
+    }
 }

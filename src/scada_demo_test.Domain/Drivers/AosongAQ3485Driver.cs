@@ -55,4 +55,18 @@ public class AosongAQ3485Driver : ISensorDriver
             SecondaryValue = Math.Round(rawHum / 10.0, 1)
         };
     }
+
+    public bool ValidatePayloadStructure(byte[] rawPayload) => rawPayload != null && rawPayload.Length == 4;
+
+    public bool ValidateValueBoundaries(byte[] rawPayload)
+    {
+        if (rawPayload == null || rawPayload.Length < 4) return false;
+        ushort rawHum = (ushort)((rawPayload[0] << 8) | rawPayload[1]);
+        short rawTemp = (short)((rawPayload[2] << 8) | rawPayload[3]);
+        double hum = rawHum / 10.0;
+        double temp = rawTemp / 10.0;
+        if (temp == 0.0 && (hum == 0.0 || hum >= 99.0)) return false;
+        if (hum == 0.0 && temp <= 5.0) return false;
+        return hum >= 0.1 && hum <= 99.9 && temp >= -40.0 && temp <= 85.0;
+    }
 }

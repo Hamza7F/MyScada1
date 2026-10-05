@@ -70,6 +70,19 @@ public interface ISensorDriver
         };
     }
 
+    // ------------------------------------------------------------------
+    // STEP 1: Unified Sensor Fingerprint & Validation Interface
+    // ------------------------------------------------------------------
+    DeviceHardwareType HardwareType => DeviceHardwareType.UsrW610;
+    int ExpectedByteLength => RegisterQuantity * 2;
+    bool ValidatePayloadStructure(byte[] rawPayload) => rawPayload != null && rawPayload.Length >= ExpectedByteLength;
+    bool ValidateValueBoundaries(byte[] rawPayload)
+    {
+        if (rawPayload == null || rawPayload.Length < ExpectedByteLength) return false;
+        var parsed = ParseData(rawPayload);
+        return parsed.Success && double.IsFinite(parsed.PrimaryValue) && double.IsFinite(parsed.SecondaryValue);
+    }
+
     // An OPTIONAL extra block that the SCANNER reads to corroborate the driver's
     // identity. It is deliberately NOT part of ReadWindows, so the polling worker
     // never spends an extra request on it. null = no corroboration available.

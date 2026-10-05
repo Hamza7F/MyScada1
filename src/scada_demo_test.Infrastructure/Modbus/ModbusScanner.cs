@@ -533,12 +533,11 @@ public sealed class ModbusScanner : ISmartScanService
             }
 
             bool multiWindowServed = windows.Count > 1 && combinedBytes.Count > payload.Length;
-            bool allZero = (primary ?? 0) == 0 && (secondary ?? 0) == 0;
-            if (allZero && !proofServed && !multiWindowServed)
+            bool structureOk = driver.ValidatePayloadStructure(payload);
+            bool boundariesOk = driver.ValidateValueBoundaries(combinedBytes.ToArray()) || driver.ValidateValueBoundaries(payload);
+
+            if (!structureOk || !boundariesOk)
             {
-                _logger?.LogInformation(
-                    "scan slave {Slave}: {Driver} REJECTED by degeneracy guard (all zero, proofServed={Served}, multiWindow={Multi})",
-                    slave, driver.DriverKey, proofServed, multiWindowServed);
                 continue;
             }
 
