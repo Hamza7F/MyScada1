@@ -410,8 +410,17 @@ public sealed class ModbusScanner : ISmartScanService
         public async Task<ModbusTcpSession> GetSessionAsync(CancellationToken ct)
         {
             if (_session != null) return _session;
-            _session = await _master.OpenAsync(_ip, _port, _connectTimeoutMs, ct);
-            return _session;
+            try
+            {
+                _session = await _master.OpenAsync(_ip, _port, _connectTimeoutMs, ct);
+                return _session;
+            }
+            catch
+            {
+                await Task.Delay(100, ct);
+                _session = await _master.OpenAsync(_ip, _port, _connectTimeoutMs, ct);
+                return _session;
+            }
         }
 
         public void Invalidate()

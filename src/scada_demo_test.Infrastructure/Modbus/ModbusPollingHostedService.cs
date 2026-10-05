@@ -126,9 +126,15 @@ public class ModbusPollingHostedService : BackgroundService
 
         foreach (var device in devices)
         {
+            if (ModbusScanCoordinator.IsScanning(device.Id))
+            {
+                // Yield the physical Modbus TCP socket completely while the operator is scanning the bus.
+                continue;
+            }
+
             try
             {
-            var sensors = await sensorRepository.GetByDeviceIdAsync(device.Id, ct);
+                var sensors = await sensorRepository.GetByDeviceIdAsync(device.Id, ct);
             var activeSensors = sensors.Where(s => s.IsActive).ToList();
 
             // Watchdog: a device that stopped reporting data for longer than its timeout
