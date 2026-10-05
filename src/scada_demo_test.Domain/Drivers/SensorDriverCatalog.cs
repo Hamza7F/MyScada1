@@ -15,7 +15,6 @@ public static class SensorDriverCatalog
     private static readonly ISensorDriver[] AllDrivers =
     {
         new AosongAQ3485Driver(),
-        new KaifengFlowmeterDriver(),
         new ElectromagneticFlowmeterDriver(),
         new VortexFlowmeterDriver(),
         new SelecPowerMeterDriver()

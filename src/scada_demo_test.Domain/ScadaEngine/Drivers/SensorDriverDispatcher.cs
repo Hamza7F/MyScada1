@@ -19,7 +19,6 @@ public static class SensorDriverDispatcher
 {
     private static readonly AosongAQ3485Driver AosongDriver = new();
     private static readonly VortexFlowmeterDriver VortexDriver = new();
-    private static readonly KaifengFlowmeterDriver KaifengThermalDriver = new();
     private static readonly ElectromagneticFlowmeterDriver ElectromagneticDriver = new();
     private static readonly SelecPowerMeterDriver SelecPowerDriver = new();
 
@@ -32,7 +31,6 @@ public static class SensorDriverDispatcher
         {
             [DeviceProfileType.AosongAQ3485] = AQ3485Ghar,
             [DeviceProfileType.V880BRVortex] = V880BRGhar,
-            [DeviceProfileType.KaifengThermal] = KaifengThermalGhar,
             [DeviceProfileType.Electromagnetic] = ElectromagneticGhar,
             [DeviceProfileType.SelecPower] = SelecPowerGhar
         }.ToFrozenDictionary();
@@ -118,58 +116,7 @@ public static class SensorDriverDispatcher
             TimestampUtc: packet.Timestamp);
     }
 
-    /// <summary>
-    /// Designated calculation home ("Ghar") for <see cref="DeviceProfileType.KaifengThermal"/>.
-    /// Supports both the standard 12-register (24-byte) payload and compact 6-byte / 8-byte frames.
-    /// </summary>
-    public static DriverCalculationResult KaifengThermalGhar(ModbusDevicePacket packet)
-    {
-        ArgumentNullException.ThrowIfNull(packet);
-        if (packet.ProfileType != DeviceProfileType.KaifengThermal)
-            return InvalidResult(packet, "PROFILE_MISMATCH_KAIFENG_THERMAL");
 
-        double flowRate;
-        double totalizer;
-
-        if (packet.RawPayload.Length >= 10)
-        {
-            var parsed = KaifengThermalDriver.ParseData(packet.RawPayload);
-            if (!parsed.Success)
-                return InvalidResult(packet, parsed.ErrorCode ?? "PARSE_ERROR_KAIFENG_THERMAL");
-            flowRate = parsed.PrimaryValue;
-            totalizer = parsed.SecondaryValue;
-        }
-        else if (packet.RawPayload.Length == 8)
-        {
-            flowRate = Math.Round(ModbusValueCodec.ReadFloat32HighWordFirst(packet.RawPayload, 0), 2);
-            totalizer = Math.Round(ModbusValueCodec.ReadFloat32HighWordFirst(packet.RawPayload, 4), 2);
-        }
-        else if (packet.RawPayload.Length == 6)
-        {
-            flowRate = Math.Round(ModbusValueCodec.ReadFloat32HighWordFirst(packet.RawPayload, 0), 2);
-            ushort rawTot = BinaryPrimitives.ReadUInt16BigEndian(packet.RawPayload.AsSpan(4, 2));
-            totalizer = Math.Round(rawTot / 10.0, 2);
-        }
-        else
-        {
-            return InvalidResult(packet, "INVALID_PAYLOAD_KAIFENG_THERMAL");
-        }
-
-        return new DriverCalculationResult(
-            SlaveId: packet.SlaveId,
-            ProfileType: packet.ProfileType,
-            DriverKey: KaifengThermalDriver.DriverKey,
-            ModelName: KaifengThermalDriver.DisplayName,
-            IsValid: true,
-            PrimaryValue: flowRate,
-            PrimaryColumnName: KaifengThermalDriver.PrimaryColumnName,
-            PrimaryUnit: KaifengThermalDriver.UnitPrimary,
-            SecondaryValue: totalizer,
-            SecondaryColumnName: KaifengThermalDriver.SecondaryColumnName,
-            SecondaryUnit: KaifengThermalDriver.UnitSecondary,
-            RawHexPayload: packet.RawHex,
-            TimestampUtc: packet.Timestamp);
-    }
 
     /// <summary>
     /// Designated calculation home ("Ghar") for <see cref="DeviceProfileType.Electromagnetic"/>.

@@ -59,18 +59,6 @@ public static class CheckpostRouter
                 UnitSecondary: "m³",
                 DefaultPollIntervalSeconds: 3),
 
-            [DeviceProfileType.KaifengThermal] = new(
-                DeviceProfileType.KaifengThermal,
-                DriverKey: "KAIFENG_FLOWMETER",
-                SimpleName: "kaifeng",
-                ModelName: "Kaifeng Thermal Mass Flowmeter",
-                DefaultFunctionCode: 0x03,
-                DefaultStartRegister: 0x0001,
-                DefaultRegisterQuantity: 12,
-                UnitPrimary: "m³/h",
-                UnitSecondary: "m³",
-                DefaultPollIntervalSeconds: 3),
-
             [DeviceProfileType.SelecPower] = new(
                 DeviceProfileType.SelecPower,
                 DriverKey: "SELEC_POWER_METER",
@@ -194,7 +182,6 @@ public static class CheckpostRouter
     /// <summary>
     /// Performs deterministic, microsecond-latency Signature Trials on the raw byte buffer:
     ///   - Length == 4 bytes  -&gt; <see cref="DeviceProfileType.AosongAQ3485"/> (16-bit Ints)
-    ///   - Length == 6 bytes (or 24-byte 12-register thermal block) -&gt; <see cref="DeviceProfileType.KaifengThermal"/>
     ///   - Length &gt;= 8 bytes -&gt; <see cref="DeviceProfileType.V880BRVortex"/> (32-bit IEEE-754 Floats)
     ///     or register-context disambiguated <see cref="DeviceProfileType.SelecPower"/> / <see cref="DeviceProfileType.Electromagnetic"/>.
     /// </summary>
@@ -236,28 +223,14 @@ public static class CheckpostRouter
                 ? DeviceProfileType.Electromagnetic
                 : DeviceProfileType.Unknown;
         }
-        if (functionCode == 0x03 && startRegister == 0x0001 && payload.Length is 6 or >= 10)
-        {
-            return VerifyProfileStructure(payload, DeviceProfileType.KaifengThermal)
-                ? DeviceProfileType.KaifengThermal
-                : DeviceProfileType.Unknown;
-        }
 
         // 3. Pure Byte-Length & Boundary Signature Trial (Step 2 Specification):
         //    - Length == 4 bytes  -> Aosong AQ3485 (16-bit Ints: Humidity & Temperature)
-        //    - Length == 6 bytes  -> Kaifeng Thermal Mass Meter (or 24-byte 12-register frame)
-        //    - Length >= 8 bytes  -> V880BR Vortex (32-bit IEEE-754 Floats)
+        //    - Length >= 8 bytes  -> V880BR Vortex or Electromagnetic Flowmeter (32-bit IEEE-754 Floats)
         if (payload.Length == 4)
         {
             return VerifyAosong16BitSignature(payload)
                 ? DeviceProfileType.AosongAQ3485
-                : DeviceProfileType.Unknown;
-        }
-
-        if (payload.Length == 6 || payload.Length == 24)
-        {
-            return VerifyKaifengThermalSignature(payload)
-                ? DeviceProfileType.KaifengThermal
                 : DeviceProfileType.Unknown;
         }
 
@@ -276,7 +249,6 @@ public static class CheckpostRouter
         profile switch
         {
             DeviceProfileType.AosongAQ3485 => VerifyAosong16BitSignature(payload),
-            DeviceProfileType.KaifengThermal => VerifyKaifengThermalSignature(payload),
             DeviceProfileType.V880BRVortex => VerifyIeee754HighWordFloatPair(payload),
             DeviceProfileType.Electromagnetic => VerifyIeee754HighWordFloatPair(payload),
             DeviceProfileType.SelecPower => VerifyIeee754LowWordFloatPair(payload),
@@ -305,35 +277,7 @@ public static class CheckpostRouter
         return humRh is >= 1.0 and <= 99.0 && tempC is >= -40.0 and <= 80.0;
     }
 
-    /// <summary>
-    /// Trial B: Kaifeng Thermal Mass Flowmeter — supports both the 6-byte compact frame
-    /// and the full 10..24-byte (12 holding registers @ 0x0001) IEEE-754 float32 payload.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool VerifyKaifengThermalSignature(ReadOnlySpan<byte> payload)
-    {
-        if (payload.Length == 6)
-        {
-            // Compact 6-byte signature: 4-byte IEEE-754 float32 flow + 2-byte status/totalizer word
-            float flow = ReadFloat32BigEndian(payload[..4]);
-            return float.IsFinite(flow) && Math.Abs(flow) <= 1e7f;
-        }
 
-        if (payload.Length >= 10)
-        {
-            float flow = ReadFloat32BigEndian(payload.Slice(2, 4));
-            float totalizer = ReadFloat32BigEndian(payload.Slice(6, 4));
-            return float.IsFinite(flow) && float.IsFinite(totalizer)
-                   && Math.Abs(flow) <= 1e7f && Math.Abs(totalizer) <= 1e12f;
-        }
-
-        if (payload.Length == 8)
-        {
-            return VerifyIeee754HighWordFloatPair(payload);
-        }
-
-        return false;
-    }
 
     /// <summary>
     /// Trial C: V880BR Vortex &amp; Kaifeng Electromagnetic — IEEE-754 High-Word-First float32

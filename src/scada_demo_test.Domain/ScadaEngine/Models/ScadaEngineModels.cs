@@ -12,7 +12,6 @@ public enum DeviceProfileType : byte
     Unknown = 0,
     AosongAQ3485 = 1,
     V880BRVortex = 2,
-    KaifengThermal = 3,
     SelecPower = 4,
     Electromagnetic = 5
 }

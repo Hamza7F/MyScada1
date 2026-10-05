@@ -1176,7 +1176,7 @@ else
 
     // Drivers that report a volume totalizer -> the only ones that can back a tank.
     private static readonly HashSet<string> TankCapableDrivers =
-        new(StringComparer.OrdinalIgnoreCase) { "KAIFENG_FLOWMETER", "KAIFENG_EM_FLOWMETER", "VORTEX_FLOWMETER" };
+        new(StringComparer.OrdinalIgnoreCase) { "KAIFENG_EM_FLOWMETER", "VORTEX_FLOWMETER" };
 
     private static bool HasTankSupport(string driverKey) =>
         TankCapableDrivers.Contains(driverKey);

@@ -119,7 +119,6 @@ builder.Services.AddScoped<ISmartScanService, ModbusScanner>();
 
 // ---- Installed sensor driver library (drives Add-Sensor form + polling) ----
 builder.Services.AddSingleton<ISensorDriver, AosongAQ3485Driver>();
-builder.Services.AddSingleton<ISensorDriver, KaifengFlowmeterDriver>();
 builder.Services.AddSingleton<ISensorDriver, ElectromagneticFlowmeterDriver>();
 builder.Services.AddSingleton<ISensorDriver, VortexFlowmeterDriver>();
 builder.Services.AddSingleton<ISensorDriver, SelecPowerMeterDriver>();
