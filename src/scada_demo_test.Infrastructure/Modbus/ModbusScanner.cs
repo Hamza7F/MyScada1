@@ -110,6 +110,7 @@ public sealed class ModbusScanner : ISmartScanService
 
         ModbusScanCoordinator.SetScanning(request.DeviceId, true);
         var master = new ModbusTcpMaster();
+        using var sessionHolder = new SessionHolder(master, request.GatewayIp, request.GatewayPort, connectMs);
         try
         {
             foreach (var (tierStart, tierEnd, passes) in tiers)
@@ -140,7 +141,7 @@ public sealed class ModbusScanner : ISmartScanService
                         SlaveProbe probe;
                         try
                         {
-                            probe = await ProbeSlaveAsync(master, request, connectMs, (byte)slave, probeTimeout, ct);
+                            probe = await ProbeSlaveAsync(sessionHolder, (byte)slave, probeTimeout, ct);
                         }
                         catch (Exception ex) when (ex is TimeoutException or IOException or SocketException or ObjectDisposedException)
                         {
@@ -181,7 +182,7 @@ public sealed class ModbusScanner : ISmartScanService
                         if (!states.TryGetValue(slave, out var st) || !st.Responded) continue;
                         try
                         {
-                            var probe = await ProbeSlaveAsync(master, request, connectMs, (byte)slave, probeTimeout, ct);
+                            var probe = await ProbeSlaveAsync(sessionHolder, (byte)slave, probeTimeout, ct);
                             if (probe.ConnectionUnsafe) continue;
                             MergeOutcome(states, slave, probe);
                         }
@@ -245,8 +246,8 @@ public sealed class ModbusScanner : ISmartScanService
 
             // Disambiguate known cross-register shadows on a single physical device:
             // Selec Power Meter (FC04 @ 42, 58, 64) is a multifunction meter whose holding
-            // registers at FC03 @ 0 (CT configuration) can falsely register as an unproven Aosong.
-            // If Selec is verified and proven on this address, Aosong is a shadow artifact of Selec.
+            // registers at FC03 (configuration table) can falsely register as an unproven Aosong or EM Flowmeter.
+            // If Selec is verified and proven on this address, FC03 candidates on this address are shadows of Selec.
             if (validCandidates.Count > 1)
             {
                 bool hasProvenSelec = validCandidates.Any(c =>
@@ -254,7 +255,9 @@ public sealed class ModbusScanner : ISmartScanService
 
                 if (hasProvenSelec)
                 {
-                    validCandidates.RemoveAll(c => c.Dto.DriverKey == "AOSONG_AQ3485");
+                    validCandidates.RemoveAll(c => c.Dto.DriverKey == "AOSONG_AQ3485"
+                                                || c.Dto.DriverKey == "KAIFENG_EM_FLOWMETER"
+                                                || c.Dto.DriverKey == "KAIFENG_FLOWMETER");
                 }
             }
 
@@ -388,12 +391,48 @@ public sealed class ModbusScanner : ISmartScanService
     }
 
     // =================================================================
+    // Persistent Session Holder for Modbus TCP Gateway Communication
+    // =================================================================
+    private sealed class SessionHolder : IDisposable
+    {
+        private readonly ModbusTcpMaster _master;
+        private readonly string _ip;
+        private readonly int _port;
+        private readonly int _connectTimeoutMs;
+        private ModbusTcpSession? _session;
+
+        public SessionHolder(ModbusTcpMaster master, string ip, int port, int connectTimeoutMs)
+        {
+            _master = master;
+            _ip = ip;
+            _port = port;
+            _connectTimeoutMs = connectTimeoutMs;
+        }
+
+        public async Task<ModbusTcpSession> GetSessionAsync(CancellationToken ct)
+        {
+            if (_session != null) return _session;
+            _session = await _master.OpenAsync(_ip, _port, _connectTimeoutMs, ct);
+            return _session;
+        }
+
+        public void Invalidate()
+        {
+            try { _session?.Dispose(); } catch { }
+            _session = null;
+        }
+
+        public void Dispose()
+        {
+            Invalidate();
+        }
+    }
+
+    // =================================================================
     // Per-address probing
     // =================================================================
     private async Task<SlaveProbe> ProbeSlaveAsync(
-        ModbusTcpMaster master,
-        SmartScanRequest req,
-        int connectMs,
+        SessionHolder sessionHolder,
         byte slave,
         int probeTimeout,
         CancellationToken ct)
@@ -402,14 +441,14 @@ public sealed class ModbusScanner : ISmartScanService
 
         // Half-duplex RS-485 serial safety: do NOT send concurrent requests over the gateway.
         // Sequential probe: try FC03 @ 0 first. If responding, presence is already proven!
-        var (k3, _) = await ReadBlockAsync(master, req, connectMs, slave, new SensorReadWindow(0x03, 0, 2), probeTimeout, ct);
+        var (k3, _) = await ReadBlockAsync(sessionHolder, slave, new SensorReadWindow(0x03, 0, 2), probeTimeout, ct);
         if (k3 == ReadKind.Unsafe || k3 == ReadKind.ConnectFailed) { result.ConnectionUnsafe = true; return result; }
 
         ReadKind k4 = ReadKind.Absent;
         if (k3 != ReadKind.Data)
         {
             await Task.Delay(InterWindowDelayMs, ct);
-            var (res4, _) = await ReadBlockAsync(master, req, connectMs, slave, new SensorReadWindow(0x04, 42, 2), probeTimeout, ct);
+            var (res4, _) = await ReadBlockAsync(sessionHolder, slave, new SensorReadWindow(0x04, 42, 2), probeTimeout, ct);
             k4 = res4;
             if (k4 == ReadKind.Unsafe || k4 == ReadKind.ConnectFailed) { result.ConnectionUnsafe = true; return result; }
         }
@@ -420,7 +459,7 @@ public sealed class ModbusScanner : ISmartScanService
         if (!responded)
         {
             await Task.Delay(InterWindowDelayMs, ct);
-            var (resVortex, _) = await ReadBlockAsync(master, req, connectMs, slave, new SensorReadWindow(0x04, 1026, 2), probeTimeout, ct);
+            var (resVortex, _) = await ReadBlockAsync(sessionHolder, slave, new SensorReadWindow(0x04, 1026, 2), probeTimeout, ct);
             if (resVortex is ReadKind.Data or ReadKind.WindowInvalid) responded = true;
             else if (resVortex is ReadKind.Unsafe or ReadKind.ConnectFailed) { result.ConnectionUnsafe = true; return result; }
         }
@@ -428,7 +467,7 @@ public sealed class ModbusScanner : ISmartScanService
         if (!responded)
         {
             await Task.Delay(InterWindowDelayMs, ct);
-            var (resEm, _) = await ReadBlockAsync(master, req, connectMs, slave, new SensorReadWindow(0x03, 90, 2), probeTimeout, ct);
+            var (resEm, _) = await ReadBlockAsync(sessionHolder, slave, new SensorReadWindow(0x03, 90, 2), probeTimeout, ct);
             if (resEm is ReadKind.Data or ReadKind.WindowInvalid) responded = true;
             else if (resEm is ReadKind.Unsafe or ReadKind.ConnectFailed) { result.ConnectionUnsafe = true; return result; }
         }
@@ -442,7 +481,7 @@ public sealed class ModbusScanner : ISmartScanService
             var windows = driver.ReadWindows;
             var ident = windows[0];
 
-            var (kind, payload) = await ReadBlockAsync(master, req, connectMs, slave, ident, probeTimeout, ct);
+            var (kind, payload) = await ReadBlockAsync(sessionHolder, slave, ident, probeTimeout, ct);
             if (kind == ReadKind.Unsafe || kind == ReadKind.ConnectFailed)
             {
                 result.ConnectionUnsafe = true;
@@ -462,12 +501,12 @@ public sealed class ModbusScanner : ISmartScanService
             int live = HasContent(wt0) ? 1 : 0;
             int extra = 0;
 
-            // Remaining own windows (each on a fresh connection, separated by the
+            // Remaining own windows (each on the persistent connection, separated by the
             // RS-485 turn-around delay) - best effort, they only add detail.
             for (int wi = 1; wi < windows.Count; wi++)
             {
                 await Task.Delay(InterWindowDelayMs, ct);
-                var (k2, pl2) = await ReadBlockAsync(master, req, connectMs, slave, windows[wi], probeTimeout, ct);
+                var (k2, pl2) = await ReadBlockAsync(sessionHolder, slave, windows[wi], probeTimeout, ct);
                 if (k2 != ReadKind.Data) continue;
                 combinedBytes.AddRange(pl2);
                 var wt = driver.ParseWindow(wi, pl2);
@@ -484,7 +523,7 @@ public sealed class ModbusScanner : ISmartScanService
                 for (int attempt = 0; attempt < DegeneracyProofAttempts && !proofServed; attempt++)
                 {
                     if (attempt > 0) await Task.Delay(InterWindowDelayMs, ct);
-                    var (kp, plp) = await ReadBlockAsync(master, req, connectMs, slave, proofWin, probeTimeout, ct);
+                    var (kp, plp) = await ReadBlockAsync(sessionHolder, slave, proofWin, probeTimeout, ct);
                     if (kp == ReadKind.Data)
                     {
                         proofServed = true;
@@ -549,17 +588,29 @@ public sealed class ModbusScanner : ISmartScanService
     private enum ReadKind { Absent, WindowInvalid, Unsafe, Data, ConnectFailed }
 
     private static async Task<(ReadKind Kind, byte[] Payload)> ReadBlockAsync(
-        ModbusTcpMaster master,
-        SmartScanRequest req,
-        int connectMs,
+        SessionHolder sessionHolder,
         byte slave,
         SensorReadWindow window,
         int probeTimeout,
         CancellationToken ct)
     {
+        ModbusTcpSession session;
         try
         {
-            using var session = await master.OpenAsync(req.GatewayIp, req.GatewayPort, connectMs, ct);
+            session = await sessionHolder.GetSessionAsync(ct);
+        }
+        catch (ModbusConnectException)
+        {
+            return (ReadKind.ConnectFailed, Array.Empty<byte>());
+        }
+        catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
+        {
+            sessionHolder.Invalidate();
+            return (ReadKind.Unsafe, Array.Empty<byte>());
+        }
+
+        try
+        {
             var payload = window.FunctionCode == 0x04
                 ? await session.ReadInputRegistersAsync(slave, window.StartRegister, window.RegisterQuantity, ct, probeTimeout)
                 : await session.ReadHoldingRegistersAsync(slave, window.StartRegister, window.RegisterQuantity, ct, probeTimeout);
@@ -567,6 +618,10 @@ public sealed class ModbusScanner : ISmartScanService
         }
         catch (ModbusException ex)
         {
+            if (ex.IsProtocolError)
+            {
+                sessionHolder.Invalidate();
+            }
             if (ex.ExceptionCode == 0x0B) return (ReadKind.Absent, Array.Empty<byte>());
             return (ReadKind.WindowInvalid, Array.Empty<byte>());
         }
@@ -580,6 +635,7 @@ public sealed class ModbusScanner : ISmartScanService
         }
         catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
         {
+            sessionHolder.Invalidate();
             return (ReadKind.Unsafe, Array.Empty<byte>());
         }
     }
