@@ -113,18 +113,6 @@ public sealed class ModbusScanner : ISmartScanService
         using var sessionHolder = new SessionHolder(master, request.GatewayIp, request.GatewayPort, connectMs);
         try
         {
-            // Initial gateway TCP handshake check
-            try
-            {
-                await sessionHolder.GetSessionAsync(ct);
-            }
-            catch (Exception ex) when (ex is ModbusConnectException or SocketException or IOException or TimeoutException)
-            {
-                connectivityOk = false;
-                errorCode = "GATEWAY_UNREACHABLE";
-                abort = true;
-            }
-
             foreach (var (tierStart, tierEnd, passes) in tiers)
             {
                 for (int pass = 0; pass < passes && !abort; pass++)
