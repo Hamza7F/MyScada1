@@ -181,23 +181,31 @@ public class ModbusPollingHostedService : BackgroundService
                     continue;
                 }
 
+                // Yield socket if an active bus scan is running on this gateway
+                if (ModbusScanCoordinator.IsScanning(device.Id))
+                {
+                    continue;
+                }
+
                 // A gateway with no registered sensors yet still reports ONLINE/OFFLINE
-                // from pure TCP reachability: probe-connect each cycle (no backoff) and
-                // refresh LastSeenAt so the watchdog never kills a reachable gateway.
+                // from pure TCP reachability: probe-connect every 10 seconds (never hammer
+                // the USR-W610 serial bridge every second with TCP churn) and refresh
+                // LastSeenAt so the watchdog never kills a reachable gateway.
                 var now = DateTime.UtcNow;
+                var seenStale = device.LastSeenAt == null || (now - device.LastSeenAt.Value).TotalSeconds >= 10;
+                if (device.IsOnline && !seenStale)
+                {
+                    continue;
+                }
+
                 try
                 {
                     using var probe = await _master.OpenAsync(device.IpAddress, device.Port, device.TimeoutMs, ct);
                     _zeroSensorProbeFailures[device.Id] = 0;
-                    // Refresh at 8s so the watchdog NEVER outruns the probe.
-                    var seenStale = device.LastSeenAt == null || (now - device.LastSeenAt.Value).TotalSeconds > 8;
-                    if (!device.IsOnline || seenStale)
-                    {
-                        device.IsOnline = true;
-                        device.Status = DeviceStatus.Online;
-                        device.LastSeenAt = now;
-                        await deviceRepo.UpdateAsync(device, ct);
-                    }
+                    device.IsOnline = true;
+                    device.Status = DeviceStatus.Online;
+                    device.LastSeenAt = now;
+                    await deviceRepo.UpdateAsync(device, ct);
                 }
                 catch
                 {

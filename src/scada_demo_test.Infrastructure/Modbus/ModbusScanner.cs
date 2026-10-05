@@ -108,6 +108,7 @@ public sealed class ModbusScanner : ISmartScanService
         int failureStreak = 0;
         bool abort = false;
 
+        ModbusScanCoordinator.SetScanning(request.DeviceId, true);
         var master = new ModbusTcpMaster();
         try
         {
@@ -196,6 +197,10 @@ public sealed class ModbusScanner : ISmartScanService
         {
             connectivityOk = false;
             errorCode = "SCAN_CANCELLED";
+        }
+        finally
+        {
+            ModbusScanCoordinator.SetScanning(request.DeviceId, false);
         }
 
         // =====================================================================
