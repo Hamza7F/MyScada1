@@ -35,6 +35,26 @@ public class DeviceRepository : IDeviceRepository
 
     public async Task DeleteAsync(Device device, CancellationToken ct = default)
     {
+        var devId = device.Id;
+
+        var sensors = await _db.Sensors.Where(s => s.DeviceId == devId).ToListAsync(ct);
+        if (sensors.Count > 0) _db.Sensors.RemoveRange(sensors);
+
+        var readings = await _db.SensorReadings.Where(r => r.DeviceId == devId).ToListAsync(ct);
+        if (readings.Count > 0) _db.SensorReadings.RemoveRange(readings);
+
+        var hourly = await _db.HourlyRollups.Where(r => r.DeviceId == devId).ToListAsync(ct);
+        if (hourly.Count > 0) _db.HourlyRollups.RemoveRange(hourly);
+
+        var daily = await _db.DailyRollups.Where(r => r.DeviceId == devId).ToListAsync(ct);
+        if (daily.Count > 0) _db.DailyRollups.RemoveRange(daily);
+
+        var monthly = await _db.MonthlyRollups.Where(r => r.DeviceId == devId).ToListAsync(ct);
+        if (monthly.Count > 0) _db.MonthlyRollups.RemoveRange(monthly);
+
+        var alertRules = await _db.AlertRules.Where(a => a.DeviceId == devId).ToListAsync(ct);
+        if (alertRules.Count > 0) _db.AlertRules.RemoveRange(alertRules);
+
         _db.Devices.Remove(device);
         await _db.SaveChangesAsync(ct);
     }
