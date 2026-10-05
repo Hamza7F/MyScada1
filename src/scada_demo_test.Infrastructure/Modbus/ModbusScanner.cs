@@ -113,6 +113,18 @@ public sealed class ModbusScanner : ISmartScanService
         using var sessionHolder = new SessionHolder(master, request.GatewayIp, request.GatewayPort, connectMs);
         try
         {
+            // Initial gateway TCP handshake check
+            try
+            {
+                await sessionHolder.GetSessionAsync(ct);
+            }
+            catch (Exception ex) when (ex is ModbusConnectException or SocketException or IOException or TimeoutException)
+            {
+                connectivityOk = false;
+                errorCode = "GATEWAY_UNREACHABLE";
+                abort = true;
+            }
+
             foreach (var (tierStart, tierEnd, passes) in tiers)
             {
                 for (int pass = 0; pass < passes && !abort; pass++)
@@ -145,28 +157,21 @@ public sealed class ModbusScanner : ISmartScanService
                         }
                         catch (Exception ex) when (ex is TimeoutException or IOException or SocketException or ObjectDisposedException)
                         {
-                            if (++failureStreak >= UnreachableFailureStreak)
-                            {
-                                connectivityOk = false;
-                                errorCode = "GATEWAY_UNREACHABLE";
-                                abort = true;
-                            }
+                            sessionHolder.Invalidate();
                             continue;
                         }
 
                         if (probe.ConnectionUnsafe)
                         {
-                            if (++failureStreak >= UnreachableFailureStreak)
-                            {
-                                connectivityOk = false;
-                                errorCode = "GATEWAY_UNREACHABLE";
-                                abort = true;
-                            }
+                            sessionHolder.Invalidate();
                             continue;
                         }
 
-                        failureStreak = 0;
                         MergeOutcome(states, slave, probe);
+                        if (probe.GotData)
+                        {
+                            connectivityOk = true;
+                        }
                     }
                 }
             }

@@ -146,7 +146,7 @@ else
                             <div style="color:var(--accent-rose);font-size:0.8rem;">No IP set — edit the gateway's IP address first.</div>
                         }
 
-                        @if (ScanFailed)
+                        @if (ScanFailed && (LastScan == null || (LastScan.Found.Count == 0 && LastScan.DuplicateIdConflicts.Count == 0 && LastScan.AlreadyInSystemSlaves.Count == 0)))
                         {
                             <div style="color:var(--accent-rose);font-size:0.85rem;padding:0.4rem 0;">Gateway did not respond during the scan. Confirm it is powered + reachable and is a Modbus TCP gateway, then retry.</div>
                         }
@@ -1010,11 +1010,11 @@ else
         try
         {
             var result = await Api.ScanGatewayBusAsync(gid, probeTimeoutMs: 200, passes: passes, deepDuplicateCheck: deepDuplicateCheck);
-            if (result is null || !result.ConnectivityOk)
+            if (result is null)
             {
                 ScanFailed = true;
             }
-            if (result is not null)
+            else
             {
                 result = result with
                 {
@@ -1026,6 +1026,7 @@ else
                 };
                 LastScan = result;
                 SelectAllFound = false;
+                ScanFailed = !result.ConnectivityOk && result.Found.Count == 0 && result.DuplicateIdConflicts.Count == 0 && result.AlreadyInSystemSlaves.Count == 0;
             }
         }
         catch
