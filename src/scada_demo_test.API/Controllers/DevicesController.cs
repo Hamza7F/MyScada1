@@ -123,15 +123,6 @@ public class DevicesController : ControllerBase
 
         await AuditAsync("Device.Scan", device, $"Smart-scanned RS-485 bus of '{device.Name}' ({device.ExternalId}) @ {device.IpAddress}:{device.Port}: {result.RespondingSlaves} responder(s), {result.UnknownResponders} unidentified");
 
-        if (!result.ConnectivityOk)
-        {
-            return StatusCode(StatusCodes.Status502BadGateway, new
-            {
-                message = $"Gateway {device.IpAddress}:{device.Port} did not respond to the scan. Check it is reachable and is a Modbus TCP gateway.",
-                scan = result
-            });
-        }
-
         return Ok(result);
     }
 

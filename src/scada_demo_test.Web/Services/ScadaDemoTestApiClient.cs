@@ -606,6 +606,18 @@ public class ScadaDemoTestApiClient : IDisposable
         public string? error { get; set; }
     }
 
+    private static async Task<string?> ReadErrorMessageAsync(HttpResponseMessage response)
+    {
+        try
+        {
+            var raw = await response.Content.ReadAsStringAsync();
+            if (string.IsNullOrWhiteSpace(raw)) return null;
+            var err = System.Text.Json.JsonSerializer.Deserialize<ErrorPayload>(raw, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            return err?.message ?? err?.error;
+        }
+        catch { return null; }
+    }
+
     // ---- IIoT Device & Sensor Orchestration (API-backed) ----
 
     public record GatewayDeviceDto(Guid Id, string ExternalId, string Name, string HardwareType,
@@ -716,8 +728,8 @@ public class ScadaDemoTestApiClient : IDisposable
             var response = await _http.PostAsJsonAsync("/api/devices", dto);
             if (!response.IsSuccessStatusCode)
             {
-                var err = await response.Content.ReadFromJsonAsync<ErrorPayload>();
-                return (false, null, err?.message ?? $"Create failed ({response.StatusCode}).");
+                var err = await ReadErrorMessageAsync(response);
+                return (false, null, err ?? $"Create failed ({response.StatusCode}).");
             }
             var device = await response.Content.ReadFromJsonAsync<GatewayDeviceDto>();
             return (true, device, null);
@@ -732,8 +744,8 @@ public class ScadaDemoTestApiClient : IDisposable
             var response = await _http.DeleteAsync($"/api/devices/{id}");
             if (!response.IsSuccessStatusCode)
             {
-                var err = await response.Content.ReadFromJsonAsync<ErrorPayload>();
-                return (false, err?.message ?? $"Delete failed ({response.StatusCode}).");
+                var err = await ReadErrorMessageAsync(response);
+                return (false, err ?? $"Delete failed ({response.StatusCode}).");
             }
             return (true, null);
         }
@@ -768,8 +780,8 @@ public class ScadaDemoTestApiClient : IDisposable
             var response = await _http.PostAsJsonAsync("/api/sensors", dto);
             if (!response.IsSuccessStatusCode)
             {
-                var err = await response.Content.ReadFromJsonAsync<ErrorPayload>();
-                return (false, null, err?.message ?? $"Create failed ({response.StatusCode}).");
+                var err = await ReadErrorMessageAsync(response);
+                return (false, null, err ?? $"Create failed ({response.StatusCode}).");
             }
             var sensor = await response.Content.ReadFromJsonAsync<AttachedSensorDto>();
             return (true, sensor, null);
@@ -784,8 +796,8 @@ public class ScadaDemoTestApiClient : IDisposable
             var response = await _http.PutAsJsonAsync($"/api/sensors/{id}", dto);
             if (!response.IsSuccessStatusCode)
             {
-                var err = await response.Content.ReadFromJsonAsync<ErrorPayload>();
-                return (false, null, err?.message ?? $"Update failed ({response.StatusCode}).");
+                var err = await ReadErrorMessageAsync(response);
+                return (false, null, err ?? $"Update failed ({response.StatusCode}).");
             }
             var sensor = await response.Content.ReadFromJsonAsync<AttachedSensorDto>();
             return (true, sensor, null);
@@ -800,8 +812,8 @@ public class ScadaDemoTestApiClient : IDisposable
             var response = await _http.DeleteAsync($"/api/sensors/{id}");
             if (!response.IsSuccessStatusCode)
             {
-                var err = await response.Content.ReadFromJsonAsync<ErrorPayload>();
-                return (false, err?.message ?? $"Delete failed ({response.StatusCode}).");
+                var err = await ReadErrorMessageAsync(response);
+                return (false, err ?? $"Delete failed ({response.StatusCode}).");
             }
             return (true, null);
         }
@@ -862,13 +874,20 @@ public class ScadaDemoTestApiClient : IDisposable
                 deepDuplicateCheck
             };
             var response = await _scan.PostAsJsonAsync($"/api/devices/{deviceId}/scan", body);
-            if (response.IsSuccessStatusCode)
+            var raw = await response.Content.ReadAsStringAsync();
+            if (string.IsNullOrWhiteSpace(raw)) return null;
+
+            try
             {
-                return await response.Content.ReadFromJsonAsync<GatewayScanResultDto>();
+                var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                if (response.IsSuccessStatusCode)
+                {
+                    return System.Text.Json.JsonSerializer.Deserialize<GatewayScanResultDto>(raw, options);
+                }
+                var wrapper = System.Text.Json.JsonSerializer.Deserialize<ScanBusErrorDto>(raw, options);
+                return wrapper?.scan;
             }
-            // 502 carries { message, scan } — unwrap the partial scan payload.
-            var wrapper = await response.Content.ReadFromJsonAsync<ScanBusErrorDto>();
-            return wrapper?.scan;
+            catch { return null; }
         }
         catch { return null; }
     }
