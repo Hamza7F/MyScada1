@@ -238,21 +238,65 @@ public sealed class ModbusScanner : ISmartScanService
                 continue;
             }
 
-            foreach (var cand in validCandidates)
+            // Disambiguate known cross-register shadows on a single physical device:
+            // Selec Power Meter (FC04 @ 42, 58, 64) is a multifunction meter whose holding
+            // registers at FC03 @ 0 (CT configuration) can falsely register as an unproven Aosong.
+            // If Selec is verified and proven on this address, Aosong is a shadow artifact of Selec.
+            if (validCandidates.Count > 1)
             {
-                var drv = DriverOf(cand.Dto.DriverKey)!;
+                bool hasProvenSelec = validCandidates.Any(c =>
+                    c.Dto.DriverKey == "SELEC_POWER_METER" && (c.Dto.ProofServed || c.Rank.Unproven == 0));
+
+                if (hasProvenSelec)
+                {
+                    validCandidates.RemoveAll(c => c.Dto.DriverKey == "AOSONG_AQ3485");
+                }
+            }
+
+            if (validCandidates.Count == 1)
+            {
+                // UNIQUE PHYSICAL METER: exactly one driver verified for this slave address
+                var winner = validCandidates[0];
+                var drv = DriverOf(winner.Dto.DriverKey)!;
                 incomingRawResponses.Add(new RawScanResponse
                 {
                     SlaveId = (byte)slave,
-                    Payload = cand.RawPayload.Length > 0 ? cand.RawPayload : new byte[] { 0, 0, 0, 0 },
+                    Payload = winner.RawPayload.Length > 0 ? winner.RawPayload : new byte[] { 0, 0, 0, 0 },
                     IsSuccess = true,
                     HintedProfile = CheckpostRouter.ResolveProfileByDriverKey(drv.DriverKey),
                     FunctionCode = drv.FunctionCode,
-                    StartRegister = cand.Dto.StartRegister,
-                    RegisterQuantity = cand.Dto.RegisterQuantity,
-                    ProofServed = cand.Dto.ProofServed,
+                    StartRegister = winner.Dto.StartRegister,
+                    RegisterQuantity = winner.Dto.RegisterQuantity,
+                    ProofServed = winner.Dto.ProofServed,
                     ModelName = drv.DisplayName
                 });
+            }
+            else
+            {
+                // GENUINE DUPLICATE CONFLICT: multiple distinct physical meter families responded
+                // independently on the SAME slave address (e.g. Aosong + Vortex on Slave 2).
+                // Emit all colliding candidates so Guard 2 (Dual-Guard Pipeline) blocks the slave
+                // from the Found Box and generates the operator collision alert.
+                _logger?.LogWarning(
+                    "scan slave {Slave}: GENUINE BUS CONFLICT detected! {Count} distinct meter drivers responded: {Meters}",
+                    slave, validCandidates.Count, string.Join(", ", validCandidates.Select(c => c.Dto.DriverKey)));
+
+                foreach (var cand in validCandidates)
+                {
+                    var drv = DriverOf(cand.Dto.DriverKey)!;
+                    incomingRawResponses.Add(new RawScanResponse
+                    {
+                        SlaveId = (byte)slave,
+                        Payload = cand.RawPayload.Length > 0 ? cand.RawPayload : new byte[] { 0, 0, 0, 0 },
+                        IsSuccess = true,
+                        HintedProfile = CheckpostRouter.ResolveProfileByDriverKey(drv.DriverKey),
+                        FunctionCode = drv.FunctionCode,
+                        StartRegister = cand.Dto.StartRegister,
+                        RegisterQuantity = cand.Dto.RegisterQuantity,
+                        ProofServed = cand.Dto.ProofServed,
+                        ModelName = drv.DisplayName
+                    });
+                }
             }
         }
 
@@ -365,7 +409,26 @@ public sealed class ModbusScanner : ISmartScanService
             if (k4 == ReadKind.Unsafe || k4 == ReadKind.ConnectFailed) { result.ConnectionUnsafe = true; return result; }
         }
 
-        if (k3 == ReadKind.Absent && k4 == ReadKind.Absent) return result; // silent
+        bool responded = k3 is ReadKind.Data or ReadKind.WindowInvalid
+                      || k4 is ReadKind.Data or ReadKind.WindowInvalid;
+
+        if (!responded)
+        {
+            await Task.Delay(InterWindowDelayMs, ct);
+            var (resVortex, _) = await ReadBlockAsync(master, req, connectMs, slave, new SensorReadWindow(0x04, 1026, 2), probeTimeout, ct);
+            if (resVortex is ReadKind.Data or ReadKind.WindowInvalid) responded = true;
+            else if (resVortex is ReadKind.Unsafe or ReadKind.ConnectFailed) { result.ConnectionUnsafe = true; return result; }
+        }
+
+        if (!responded)
+        {
+            await Task.Delay(InterWindowDelayMs, ct);
+            var (resEm, _) = await ReadBlockAsync(master, req, connectMs, slave, new SensorReadWindow(0x03, 90, 2), probeTimeout, ct);
+            if (resEm is ReadKind.Data or ReadKind.WindowInvalid) responded = true;
+            else if (resEm is ReadKind.Unsafe or ReadKind.ConnectFailed) { result.ConnectionUnsafe = true; return result; }
+        }
+
+        if (!responded) return result; // silent
 
         // Full identification: every installed driver's own identification window.
         for (int d = 0; d < _drivers.Count; d++)
@@ -620,6 +683,12 @@ public sealed class ModbusScanner : ISmartScanService
             // Reject Selec Energy Meter CT ratio and non-ambient register artifacts:
             // CT rating 1000/0 decodes as 100.0% RH and 0.0°C.
             if (w.PrimaryValue == 0.0 && (w.SecondaryValue == 100.0 || w.SecondaryValue == 0.0))
+                return false;
+
+            if (w.PrimaryValue <= 5.0 && w.SecondaryValue >= 90.0)
+                return false;
+
+            if (w.PrimaryValue == 0.0 && w.SecondaryValue <= 5.0)
                 return false;
 
             // Environmental atmospheric operating range for AQ3485 sensor:

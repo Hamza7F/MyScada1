@@ -11,7 +11,17 @@ builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
 
 builder.Services.AddRazorPages();
-builder.Services.AddServerSideBlazor();
+builder.Services.AddServerSideBlazor(options =>
+{
+    options.DisconnectedCircuitRetentionPeriod = TimeSpan.FromMinutes(20);
+});
+builder.Services.AddSignalR(options =>
+{
+    options.KeepAliveInterval = TimeSpan.FromSeconds(15);
+    options.ClientTimeoutInterval = TimeSpan.FromSeconds(60);
+    options.HandshakeTimeout = TimeSpan.FromSeconds(30);
+    options.EnableDetailedErrors = true;
+});
 
 builder.Services.AddHttpContextAccessor();
 builder.Services

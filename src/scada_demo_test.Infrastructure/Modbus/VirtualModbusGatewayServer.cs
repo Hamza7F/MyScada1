@@ -139,97 +139,31 @@ public class VirtualModbusGatewayServer : BackgroundService
 
         switch (unitId)
         {
-            case 2: // Slave 2: Aosong AQ3485 (Temperature & Humidity) ONLY
+            case 1: // Slave 1: Kaifeng IEMFL Electromagnetic Flowmeter (Water)
                 {
-                    if (functionCode == 0x03)
+                    if (functionCode != 0x03)
                     {
-                        double humidity = Math.Clamp(58.0 + Math.Sin(elapsedSec * 0.08) * 6.0, 20.0, 95.0);
-                        double temp = Math.Clamp(28.2 + Math.Cos(elapsedSec * 0.05) * 3.5, 15.0, 45.0);
-
-                        ushort rawHum = (ushort)Math.Round(humidity * 10.0);
-                        short rawTemp = (short)Math.Round(temp * 10.0);
-
-                        for (int i = 0; i < quantity; i++)
-                        {
-                            int reg = startRegister + i;
-                            if (reg == 0) registers[i] = rawHum;
-                            else if (reg == 1) registers[i] = (ushort)rawTemp;
-                            else registers[i] = 0x0000;
-                        }
+                        return new byte[] { (byte)(functionCode | 0x80), 0x02 }; // Illegal Data Address
                     }
-                    else
+
+                    float emFlowRate = (float)Math.Max(0.0, 14.2 + Math.Sin(elapsedSec * 0.1) * 2.5);
+                    float emTotalizer = (float)(245.8 + elapsedSec * 0.015);
+                    float emProof = 120.0f;
+
+                    if (startRegister == 90 && quantity == 2) // Totalizer Window
                     {
-                        return new byte[] { (byte)(functionCode | 0x80), 0x01 };
+                        registers[0] = GetFloatWordBigEndian(emTotalizer, highWord: true);
+                        registers[1] = GetFloatWordBigEndian(emTotalizer, highWord: false);
                     }
-                    break;
-                }
-
-            case 4: // Slave 4: DUAL COLLISION (Kaifeng Thermal Flowmeter on FC03 + Vortex Flowmeter on FC04)
-                {
-                    if (functionCode == 0x03)
+                    else if (startRegister == 98 && quantity == 2) // Flow Rate Window
                     {
-                        // Kaifeng Thermal Flowmeter (FC03)
-                        float flowRate = (float)Math.Max(0.0, 24.5 + Math.Sin(elapsedSec * 0.1) * 3.5);
-                        float totalizer = (float)(1420.0 + elapsedSec * 0.05);
-
-                        var allRegs = new ushort[24];
-                        WriteFloatBigEndian(allRegs, 0, flowRate);
-                        WriteFloatBigEndian(allRegs, 2, flowRate);
-                        WriteFloatBigEndian(allRegs, 4, totalizer);
-                        WriteFloatBigEndian(allRegs, 6, totalizer);
-                        allRegs[8] = 0x0001;
-                        allRegs[9] = 0x0064;
-
-                        for (int i = 0; i < quantity; i++)
-                        {
-                            int targetReg = startRegister + i;
-                            if (targetReg >= 0 && targetReg < allRegs.Length)
-                                registers[i] = allRegs[targetReg];
-                        }
+                        registers[0] = GetFloatWordBigEndian(emFlowRate, highWord: true);
+                        registers[1] = GetFloatWordBigEndian(emFlowRate, highWord: false);
                     }
-                    else if (functionCode == 0x04)
+                    else if (startRegister == 92 && quantity == 2) // Proof Window
                     {
-                        // Vortex Flowmeter V880 (FC04)
-                        float flowPct = (float)Math.Max(0.0, 2.5 + Math.Sin(elapsedSec * 0.12) * 0.4);
-                        float totalizer = (float)(680.0 + elapsedSec * 0.025);
-
-                        for (int i = 0; i < quantity; i++)
-                        {
-                            int reg = startRegister + i;
-                            if (reg == 1026) registers[i] = GetFloatWordBigEndian(flowPct, highWord: true);
-                            else if (reg == 1027) registers[i] = GetFloatWordBigEndian(flowPct, highWord: false);
-                            else if (reg == 1032) registers[i] = GetFloatWordBigEndian(totalizer, highWord: true);
-                            else if (reg == 1033) registers[i] = GetFloatWordBigEndian(totalizer, highWord: false);
-                            else if (reg == 1067) registers[i] = 0x0012;
-                            else if (reg == 1068) registers[i] = 0x0034;
-                            else registers[i] = 0x0000;
-                        }
-                    }
-                    else
-                    {
-                        return new byte[] { (byte)(functionCode | 0x80), 0x01 };
-                    }
-                    break;
-                }
-
-            case 6: // Slave 6: Vortex Flowmeter V880 (FC04 @1020..1070)
-                {
-                    if (functionCode == 0x04 && startRegister >= 1020 && startRegister <= 1070)
-                    {
-                        float flowPct = (float)Math.Max(0.0, 2.5 + Math.Sin(elapsedSec * 0.12) * 0.4);
-                        float totalizer = (float)(680.0 + elapsedSec * 0.025);
-
-                        for (int i = 0; i < quantity; i++)
-                        {
-                            int reg = startRegister + i;
-                            if (reg == 1026) registers[i] = GetFloatWordBigEndian(flowPct, highWord: true);
-                            else if (reg == 1027) registers[i] = GetFloatWordBigEndian(flowPct, highWord: false);
-                            else if (reg == 1032) registers[i] = GetFloatWordBigEndian(totalizer, highWord: true);
-                            else if (reg == 1033) registers[i] = GetFloatWordBigEndian(totalizer, highWord: false);
-                            else if (reg == 1067) registers[i] = 0x0012;
-                            else if (reg == 1068) registers[i] = 0x0034;
-                            else registers[i] = 0x0000;
-                        }
+                        registers[0] = GetFloatWordBigEndian(emProof, highWord: true);
+                        registers[1] = GetFloatWordBigEndian(emProof, highWord: false);
                     }
                     else
                     {
@@ -238,28 +172,55 @@ public class VirtualModbusGatewayServer : BackgroundService
                     break;
                 }
 
-            case 12: // Slave 12: Selec Power/Energy Meter (FC04 @40..100)
+            case 2: // Slave 2: DUAL COLLIDING INSTRUMENTS (Vortex Steam Flowmeter AND Selec RI-F200-C Power Meter)
                 {
-                    if (functionCode == 0x04 && startRegister >= 40 && startRegister <= 100)
+                    if (functionCode != 0x04)
                     {
-                        float powerKw = (float)Math.Max(0.0, 38.5 + Math.Sin(elapsedSec * 0.15) * 5.0);
-                        float energyKwh = (float)(19840.0 + elapsedSec * 0.1);
-                        float voltage = (float)(230.0 + Math.Sin(elapsedSec * 0.2) * 1.5);
-                        float current = (float)(16.8 + Math.Cos(elapsedSec * 0.2) * 1.0);
+                        return new byte[] { (byte)(functionCode | 0x80), 0x02 }; // Illegal Data Address
+                    }
 
-                        for (int i = 0; i < quantity; i++)
-                        {
-                            int reg = startRegister + i;
-                            if (reg == 42) registers[i] = GetFloatWordLowWordFirst(powerKw, lowWord: true);
-                            else if (reg == 43) registers[i] = GetFloatWordLowWordFirst(powerKw, lowWord: false);
-                            else if (reg == 58) registers[i] = GetFloatWordLowWordFirst(energyKwh, lowWord: true);
-                            else if (reg == 59) registers[i] = GetFloatWordLowWordFirst(energyKwh, lowWord: false);
-                            else if (reg == 64) registers[i] = GetFloatWordLowWordFirst(voltage, lowWord: true);
-                            else if (reg == 65) registers[i] = GetFloatWordLowWordFirst(voltage, lowWord: false);
-                            else if (reg == 66) registers[i] = GetFloatWordLowWordFirst(current, lowWord: true);
-                            else if (reg == 67) registers[i] = GetFloatWordLowWordFirst(current, lowWord: false);
-                            else registers[i] = 0x0000;
-                        }
+                    // --- Instrument A: Vortex Steam Flowmeter V880 (FC04 @1026/1032/1067) ---
+                    if (startRegister == 1026 && quantity == 2) // Flow % Window
+                    {
+                        double flowM3H = Math.Max(0.0, 16.5 + Math.Sin(elapsedSec * 0.08) * 3.2);
+                        float flowPct = (float)((flowM3H / 1000.0) * 100.0);
+                        registers[0] = GetFloatWordBigEndian(flowPct, highWord: true);
+                        registers[1] = GetFloatWordBigEndian(flowPct, highWord: false);
+                    }
+                    else if (startRegister == 1032 && quantity == 2) // Totalizer Window
+                    {
+                        float totalizer = (float)(725.0 + elapsedSec * 0.035);
+                        registers[0] = GetFloatWordBigEndian(totalizer, highWord: true);
+                        registers[1] = GetFloatWordBigEndian(totalizer, highWord: false);
+                    }
+                    else if (startRegister == 1067 && quantity == 2) // Proof Window
+                    {
+                        float tempProof = 32.5f;
+                        registers[0] = GetFloatWordBigEndian(tempProof, highWord: true);
+                        registers[1] = GetFloatWordBigEndian(tempProof, highWord: false);
+                    }
+                    // --- Instrument B: Selec RI-F200-C 3-Phase Power Meter (FC04 @42/58/64, low-word-first) ---
+                    else if (startRegister == 42 && quantity == 2) // Active Power Window
+                    {
+                        float powerKw = (float)Math.Max(0.0, 41.5 + Math.Sin(elapsedSec * 0.12) * 5.5);
+                        registers[0] = GetFloatWordLowWordFirst(powerKw, lowWord: true);
+                        registers[1] = GetFloatWordLowWordFirst(powerKw, lowWord: false);
+                    }
+                    else if (startRegister == 58 && quantity == 2) // Energy Window
+                    {
+                        float energyKwh = (float)(20150.0 + elapsedSec * 0.08);
+                        registers[0] = GetFloatWordLowWordFirst(energyKwh, lowWord: true);
+                        registers[1] = GetFloatWordLowWordFirst(energyKwh, lowWord: false);
+                    }
+                    else if (startRegister == 64 && quantity <= 10) // Proof Window (Voltage & Current)
+                    {
+                        float voltage = (float)(230.5 + Math.Sin(elapsedSec * 0.15) * 1.8);
+                        float current = (float)(18.2 + Math.Cos(elapsedSec * 0.15) * 1.2);
+                        registers[0] = GetFloatWordLowWordFirst(voltage, lowWord: true);
+                        if (quantity > 1) registers[1] = GetFloatWordLowWordFirst(voltage, lowWord: false);
+                        if (quantity > 2) registers[2] = GetFloatWordLowWordFirst(current, lowWord: true);
+                        if (quantity > 3) registers[3] = GetFloatWordLowWordFirst(current, lowWord: false);
+                        for (int i = 4; i < quantity; i++) registers[i] = 0x0000;
                     }
                     else
                     {
@@ -268,32 +229,21 @@ public class VirtualModbusGatewayServer : BackgroundService
                     break;
                 }
 
-            case 18: // Slave 18: Kaifeng Thermal Mass Flowmeter (FC03)
+            case 3: // Slave 3: Aosong AQ3485 (Temperature & Humidity, FC03 @0)
                 {
-                    if (functionCode == 0x03)
+                    if (functionCode != 0x03 || startRegister != 0 || quantity != 2)
                     {
-                        float flowRate = (float)Math.Max(0.0, 24.5 + Math.Sin(elapsedSec * 0.1) * 3.5);
-                        float totalizer = (float)(1420.0 + elapsedSec * 0.05);
-
-                        var allRegs = new ushort[24];
-                        WriteFloatBigEndian(allRegs, 0, flowRate);
-                        WriteFloatBigEndian(allRegs, 2, flowRate);
-                        WriteFloatBigEndian(allRegs, 4, totalizer);
-                        WriteFloatBigEndian(allRegs, 6, totalizer);
-                        allRegs[8] = 0x0001;
-                        allRegs[9] = 0x0064;
-
-                        for (int i = 0; i < quantity; i++)
-                        {
-                            int targetReg = startRegister + i;
-                            if (targetReg >= 0 && targetReg < allRegs.Length)
-                                registers[i] = allRegs[targetReg];
-                        }
+                        return new byte[] { (byte)(functionCode | 0x80), 0x02 }; // Illegal Data Address
                     }
-                    else
-                    {
-                        return new byte[] { (byte)(functionCode | 0x80), 0x01 };
-                    }
+
+                    double humidity = Math.Clamp(56.8 + Math.Sin(elapsedSec * 0.07) * 4.5, 20.0, 95.0);
+                    double temp = Math.Clamp(29.1 + Math.Cos(elapsedSec * 0.06) * 2.8, 15.0, 45.0);
+
+                    ushort rawHum = (ushort)Math.Round(humidity * 10.0);
+                    short rawTemp = (short)Math.Round(temp * 10.0);
+
+                    registers[0] = rawHum;
+                    registers[1] = (ushort)rawTemp;
                     break;
                 }
 

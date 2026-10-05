@@ -16,7 +16,7 @@ public class SelecPowerMeterDriver : ISensorDriver
         new SensorReadWindow(0x04, 58, 2)  // Active energy totalizer (kWh)
     };
 
-    private static readonly SensorReadWindow ProofWindow = new(0x04, 64, 10);
+    private static readonly SensorReadWindow ProofWindow = new(0x04, 64, 2);
 
     public string DriverKey => "SELEC_POWER_METER";
     public string SimpleName => "selec_power";

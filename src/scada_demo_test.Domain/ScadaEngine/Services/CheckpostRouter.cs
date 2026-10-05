@@ -299,7 +299,10 @@ public static class CheckpostRouter
         double humRh = rawHum / 10.0;
         double tempC = rawTemp / 10.0;
 
-        return humRh is >= 0.0 and <= 101.0 && tempC is >= -60.0 and <= 150.0;
+        if (tempC == 0.0 && (humRh == 0.0 || humRh >= 99.0)) return false;
+        if (humRh == 0.0 && tempC <= 5.0) return false;
+
+        return humRh is >= 1.0 and <= 99.0 && tempC is >= -40.0 and <= 80.0;
     }
 
     /// <summary>
