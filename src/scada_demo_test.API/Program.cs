@@ -127,9 +127,6 @@ builder.Services.AddSingleton<ISensorDriver, SelecPowerMeterDriver>();
 // ---- IIoT Modbus polling engine: polls gateways & streams to per-sensor tables ----
 builder.Services.AddHostedService<ModbusPollingHostedService>();
 
-// ---- Virtual Modbus TCP Gateway Emulator (Disabled for pure physical hardware production mode) ----
-// builder.Services.AddHostedService<VirtualModbusGatewayServer>();
-
 // ---- Tiered rollup/compression pipeline: raw -> hourly -> daily -> monthly ----
 builder.Services.AddHostedService<RollupCompressionHostedService>();
 

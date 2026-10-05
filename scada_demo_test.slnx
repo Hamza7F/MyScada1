@@ -8,6 +8,5 @@
       <Build Solution="Debug|*" Project="false" />
     </Project>
     <Project Path="src/scada_demo_test.Web/scada_demo_test.Web.csproj" />
-    <Project Path="src/scada_demo_test.VirtualBusTester/scada_demo_test.VirtualBusTester.csproj" />
   </Folder>
 </Solution>
